@@ -7,10 +7,18 @@ OpenKoda is not authored by the owner of this repository. This repository focuse
 ## Upstream application
 
 - Name: OpenKoda
-- Upstream repository: `<TO_BE_FILLED>`
-- License: `<TO_BE_FILLED>`
-- Checked commit or release: `<TO_BE_FILLED>`
-- Verification date: `<TO_BE_FILLED>`
+- Upstream repository: `https://github.com/openkoda/openkoda`
+- Repository full name: `openkoda/openkoda`
+- License: MIT License
+- Copyright notice: `Copyright (c) 2023 openkoda`
+- Checked reference: upstream `main` branch documentation reviewed on 2026-07-10 KST
+- Verification date: 2026-07-10 KST
+
+## MIT license attribution requirement
+
+The upstream OpenKoda LICENSE grants permission to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software, provided that the copyright notice and permission notice are included in all copies or substantial portions of the software.
+
+If this project copies OpenKoda source code or substantial portions of it into this repository, the upstream MIT copyright and permission notice must be preserved.
 
 ## Scope of local modifications
 
