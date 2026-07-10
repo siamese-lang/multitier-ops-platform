@@ -1,6 +1,6 @@
 name: Evidence
-.description: Evidence collection or verification record
-.title: "[EVIDENCE] "
+description: Evidence collection or verification record
+title: "[EVIDENCE] "
 labels: ["evidence"]
 body:
   - type: textarea
