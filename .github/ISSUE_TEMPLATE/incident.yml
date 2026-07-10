@@ -1,0 +1,64 @@
+name: Incident Report
+.description: Controlled failure scenario and recovery report
+.title: "[INCIDENT] "
+labels: ["incident"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened and why does it matter?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: lab-small, lab-full, restore-lab, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: User-visible or service-level impact
+    validations:
+      required: true
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Timeline
+      description: Use absolute timestamps with timezone
+      value: |
+        - YYYY-MM-DD HH:MM KST - Fault injected
+        - YYYY-MM-DD HH:MM KST - Symptom detected
+        - YYYY-MM-DD HH:MM KST - Mitigation started
+        - YYYY-MM-DD HH:MM KST - Recovery verified
+    validations:
+      required: true
+  - type: textarea
+    id: detection
+    attributes:
+      label: Detection signal
+      description: Alert, metric, log, HTTP check, or user symptom
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Mitigation and recovery verification
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Links to logs, dashboards, commands, screenshots, or docs/03-evidence files
+    validations:
+      required: true
+  - type: textarea
+    id: followup
+    attributes:
+      label: Follow-up actions
+    validations:
+      required: true
