@@ -1,6 +1,6 @@
 name: Incident Report
-.description: Controlled failure scenario and recovery report
-.title: "[INCIDENT] "
+description: Controlled failure scenario and recovery report
+title: "[INCIDENT] "
 labels: ["incident"]
 body:
   - type: textarea
