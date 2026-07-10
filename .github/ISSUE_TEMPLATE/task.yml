@@ -1,0 +1,46 @@
+name: Task
+.description: Implementation or documentation task
+.title: "[TASK] "
+labels: ["task"]
+body:
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: What problem does this task solve?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included and excluded?
+    validations:
+      required: true
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Concrete implementation steps
+      value: |
+        - [ ] Design
+        - [ ] Implement
+        - [ ] Verify
+        - [ ] Collect evidence
+        - [ ] Update documentation
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Commands, logs, screenshots, Terraform output, Ansible recap, HTTP checks, or other proof
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of Done
+      description: What must be true before this issue can be closed?
+    validations:
+      required: true
