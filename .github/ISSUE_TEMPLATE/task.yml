@@ -1,6 +1,6 @@
 name: Task
-.description: Implementation or documentation task
-.title: "[TASK] "
+description: Implementation or documentation task
+title: "[TASK] "
 labels: ["task"]
 body:
   - type: textarea
