@@ -43,21 +43,28 @@ ansible-playbook \
 
 ## Artifact 공급 방식
 
-### 방식 1. 로컬 jar copy
-
-control node에 jar가 존재해야 한다.
-
-기본 경로는 다음이다.
+`ops-sample-service` 배포 playbook은 두 가지 artifact 공급 방식을 지원한다.
 
 ```text
-apps/ops-sample-service/target/ops-sample-service-0.1.0.jar
+1. control node에 있는 local jar를 app 노드로 copy
+2. app 노드가 remote artifact URL에서 jar를 download
 ```
 
-로컬에 Maven이 있는 경우:
+현재 `lab-full-min` 통합 검증에서는 **로컬 Maven이 없는 상황도 고려해야 하므로**, GitHub Actions가 빌드한 artifact를 내려받아 local jar copy 방식으로 사용하는 것을 기본 우회 경로로 둔다.
+
+### 방식 1. 로컬 Maven으로 jar 생성
+
+control node에 Maven이 있으면 직접 빌드한다.
 
 ```bash
 cd apps/ops-sample-service
 mvn clean package
+```
+
+기본 artifact 경로는 다음이다.
+
+```text
+apps/ops-sample-service/target/ops-sample-service-0.1.0.jar
 ```
 
 그 뒤 Ansible을 실행한다.
@@ -72,9 +79,50 @@ ansible-playbook \
   -e 'ops_db_password=<strong-local-password>'
 ```
 
-### 방식 2. 원격 artifact URL
+### 방식 2. GitHub Actions artifact를 내려받아 local jar로 사용
 
-GitHub Actions artifact, release asset, 사내 artifact repository 등을 사용할 수 있다.
+로컬에 Maven이 없으면 GitHub Actions artifact를 사용한다.
+
+workflow:
+
+```text
+.github/workflows/ops-sample-service-ci.yml
+```
+
+artifact name:
+
+```text
+ops-sample-service-0.1.0-jar
+```
+
+GitHub UI에서 다운로드하는 절차:
+
+```text
+1. GitHub repository -> Actions
+2. ops-sample-service-ci workflow 선택
+3. main 또는 해당 PR의 성공한 run 선택
+4. Artifacts에서 ops-sample-service-0.1.0-jar 다운로드
+5. zip 압축 해제
+6. ops-sample-service-0.1.0.jar를 아래 경로에 배치
+```
+
+배치 경로:
+
+```text
+apps/ops-sample-service/target/ops-sample-service-0.1.0.jar
+```
+
+필요하면 디렉터리를 먼저 만든다.
+
+```bash
+mkdir -p apps/ops-sample-service/target
+```
+
+이 방식은 Ansible 입장에서는 방식 1과 동일하게 local jar copy로 동작한다.
+
+### 방식 3. 원격 artifact URL
+
+GitHub Release asset, 사내 artifact repository, 사전 서명된 객체 스토리지 URL처럼 app 노드가 직접 다운로드할 수 있는 URL이 있을 때 사용한다.
 
 ```bash
 ansible-playbook \
@@ -84,7 +132,7 @@ ansible-playbook \
   -e 'ops_app_jar_url=https://example.invalid/ops-sample-service-0.1.0.jar'
 ```
 
-현재 단계에서는 실제 artifact URL을 커밋하지 않는다.
+GitHub Actions artifact의 웹 다운로드 URL은 보통 인증·리다이렉트·만료 조건이 있어 Ansible `get_url`에 직접 넣는 안정적인 배포 URL로 보기 어렵다. 따라서 현재 단계에서는 Actions artifact를 수동 다운로드한 뒤 local jar copy 방식으로 사용하는 것을 우선한다. 안정적인 원격 URL이 필요해지면 별도 release asset publishing workflow를 추가한다.
 
 ## 실행
 
