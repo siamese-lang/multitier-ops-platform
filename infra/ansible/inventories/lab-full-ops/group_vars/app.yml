@@ -1,0 +1,19 @@
+---
+lab_full_ops_app_nfs_client_packages:
+  - nfs-common
+
+lab_full_ops_app_install_nfs_client_packages: true
+
+lab_full_ops_app_nfs_mount_path: /mnt/ops-sample/files
+lab_full_ops_app_nfs_export_path: /srv/ops-sample/files
+lab_full_ops_app_nfs_server_host: "{{ hostvars['nfs-01']['ansible_host'] | default('nfs-01') }}"
+lab_full_ops_app_nfs_source: "{{ lab_full_ops_app_nfs_server_host }}:{{ lab_full_ops_app_nfs_export_path }}"
+lab_full_ops_app_nfs_fstype: nfs
+lab_full_ops_app_nfs_mount_options: rw,sync,hard,intr,_netdev
+
+lab_full_ops_app_nfs_mount_owner: root
+lab_full_ops_app_nfs_mount_group: root
+lab_full_ops_app_nfs_mount_mode: "0755"
+
+lab_full_ops_app_nfs_write_probe_enabled: true
+lab_full_ops_app_nfs_write_probe_file: "{{ lab_full_ops_app_nfs_mount_path }}/.ansible-nfs-write-probe-{{ inventory_hostname }}"
