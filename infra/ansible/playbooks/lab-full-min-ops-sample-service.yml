@@ -9,6 +9,7 @@
     effective_ops_app_jar_source_path: >-
       {{ ops_app_jar_source_path if (ops_app_jar_source_path | default('') | length > 0) else default_ops_app_jar_source_path }}
     ops_app_uses_remote_artifact: "{{ ops_app_jar_url | default('') | length > 0 }}"
+    effective_ops_evidence_file_root: "{{ ops_evidence_file_root | default('/mnt/ops-sample/files') }}"
 
   pre_tasks:
     - name: Assert DB password is supplied outside the repository
@@ -119,6 +120,7 @@
           OPS_NODE_ROLE={{ ops_app_node_role }}
           OPS_NODE_TIER={{ ops_app_node_tier }}
           OPS_ENVIRONMENT={{ ops_app_environment }}
+          OPS_EVIDENCE_FILE_ROOT={{ effective_ops_evidence_file_root }}
           APP_VERSION={{ ops_app_version }}
       no_log: true
       notify: Restart ops-sample-service
@@ -172,6 +174,15 @@
       changed_when: false
       failed_when: ops_app_expect_db_ready | bool and ops_app_work_orders_summary_check.rc != 0
 
+    - name: Check evidence file root directory when enabled
+      ansible.builtin.command: "test -d {{ effective_ops_evidence_file_root }}"
+      register: ops_app_evidence_root_check
+      changed_when: false
+      failed_when: >-
+        (ops_app_evidence_root_check_enabled | default(false) | bool)
+        and ops_app_evidence_root_check.rc != 0
+      when: ops_app_evidence_root_check_enabled | default(false) | bool
+
     - name: Check systemd service state
       ansible.builtin.command: systemctl is-active ops-sample-service
       register: ops_app_service_state
@@ -202,6 +213,8 @@
           db_host={{ ops_db_host }}
           db_name={{ ops_db_name }}
           db_user={{ ops_db_user }}
+          evidence_file_root={{ effective_ops_evidence_file_root }}
+          evidence_root_check_rc={{ ops_app_evidence_root_check.rc | default('not-run') }}
           artifact_source={{ ops_app_jar_url if ops_app_uses_remote_artifact | bool else effective_ops_app_jar_source_path }}
           healthcheck_rc={{ ops_app_healthcheck.rc | default('n/a') }}
           readycheck_rc={{ ops_app_readycheck.rc | default('n/a') }}
