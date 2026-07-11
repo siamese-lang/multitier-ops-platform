@@ -1,0 +1,155 @@
+---
+- name: Deploy OpenKoda single-node runtime on private app node
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/openkoda.yml
+
+  tasks:
+    - name: Show OpenKoda target identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host | default('n/a') }}"
+          hostname: "{{ ansible_facts['hostname'] | default('n/a') }}"
+          default_ipv4: "{{ ansible_facts['default_ipv4']['address'] | default('n/a') }}"
+          distribution: "{{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}"
+          app_private_node: "{{ app_private_node | default('not_set') }}"
+          app_has_public_ip: "{{ app_has_public_ip | default('not_set') }}"
+          app_private_egress_mode: "{{ app_private_egress_mode | default('not_set') }}"
+
+    - name: Install Docker repository prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker keyring directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker apt repository signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Resolve Docker apt architecture
+      ansible.builtin.set_fact:
+        docker_apt_arch: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} {{ docker_apt_channel }}"
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Ensure Docker service is enabled and running
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Create OpenKoda working directory
+      ansible.builtin.file:
+        path: "{{ openkoda_work_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download upstream OpenKoda Docker Compose file
+      ansible.builtin.get_url:
+        url: "{{ openkoda_compose_source_url }}"
+        dest: "{{ openkoda_compose_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Pull OpenKoda container images
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} pull
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      changed_when: false
+
+    - name: Start OpenKoda with Docker Compose
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} up -d
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      register: openkoda_compose_up
+      changed_when: >-
+        'Started' in openkoda_compose_up.stdout or
+        'Created' in openkoda_compose_up.stdout or
+        'Recreated' in openkoda_compose_up.stdout or
+        'Running' in openkoda_compose_up.stdout
+
+    - name: Wait for OpenKoda HTTPS endpoint on app node
+      ansible.builtin.command: curl -kI {{ openkoda_healthcheck_url }} --max-time 15
+      register: openkoda_healthcheck
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: openkoda_healthcheck.rc == 0
+
+    - name: Read Docker Compose status
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} ps
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      register: openkoda_compose_ps
+      changed_when: false
+
+    - name: Ensure OpenKoda report directory exists
+      ansible.builtin.file:
+        path: "{{ openkoda_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write OpenKoda runtime report
+      ansible.builtin.copy:
+        dest: "{{ openkoda_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          default_ipv4={{ ansible_facts['default_ipv4']['address'] | default('n/a') }}
+          distribution={{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}
+          app_private_node={{ app_private_node | default('not_set') }}
+          app_has_public_ip={{ app_has_public_ip | default('not_set') }}
+          app_private_egress_mode={{ app_private_egress_mode | default('not_set') }}
+          openkoda_compose_file={{ openkoda_compose_file }}
+          openkoda_compose_source_url={{ openkoda_compose_source_url }}
+          openkoda_healthcheck_url={{ openkoda_healthcheck_url }}
+          openkoda_healthcheck_rc={{ openkoda_healthcheck.rc }}
+          openkoda_healthcheck_first_line={{ (openkoda_healthcheck.stdout_lines | default(['n/a']))[0] }}
+          openkoda_container_name={{ openkoda_container_name }}
+          openkoda_postgres_container_name={{ openkoda_postgres_container_name }}
+
+    - name: Display OpenKoda runtime report
+      ansible.builtin.command: cat {{ openkoda_report_file }}
+      register: openkoda_runtime_report
+      changed_when: false
+
+    - name: Print OpenKoda runtime report
+      ansible.builtin.debug:
+        var: openkoda_runtime_report.stdout_lines
