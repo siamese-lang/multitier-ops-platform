@@ -1,0 +1,45 @@
+---
+- name: Verify lab-small Ansible control path
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Show host identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host }}"
+          hostname: "{{ ansible_facts.hostname }}"
+          default_ipv4: "{{ ansible_facts.default_ipv4.address | default('unknown') }}"
+          os_family: "{{ ansible_facts.os_family }}"
+          distribution: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+
+    - name: Create baseline report directory
+      ansible.builtin.file:
+        path: "{{ baseline_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write baseline report
+      ansible.builtin.copy:
+        dest: "{{ baseline_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host }}
+          hostname={{ ansible_facts.hostname }}
+          default_ipv4={{ ansible_facts.default_ipv4.address | default('unknown') }}
+          distribution={{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+          app_private_node={{ app_private_node | default('not_app_group') }}
+          app_has_public_ip={{ app_has_public_ip | default('not_app_group') }}
+          app_has_nat_egress={{ app_has_nat_egress | default('not_app_group') }}
+
+    - name: Read baseline report
+      ansible.builtin.command: "cat {{ baseline_report_file }}"
+      changed_when: false
+      register: baseline_report
+
+    - name: Display baseline report
+      ansible.builtin.debug:
+        var: baseline_report.stdout_lines

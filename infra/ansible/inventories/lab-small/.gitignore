@@ -1,0 +1,5 @@
+# Local inventory contains real IP addresses and local private key paths.
+hosts.yml
+
+# Ansible runtime leftovers.
+*.retry

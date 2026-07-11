@@ -1,0 +1,4 @@
+project_name: multitier-ops-platform
+environment_name: lab-small
+baseline_report_dir: /tmp/multitier-ops-platform
+baseline_report_file: /tmp/multitier-ops-platform/ansible-baseline.txt
