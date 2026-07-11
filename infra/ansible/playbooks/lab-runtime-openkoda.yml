@@ -13,9 +13,9 @@
         msg:
           host: "{{ inventory_hostname }}"
           ansible_host: "{{ ansible_host | default('n/a') }}"
-          hostname: "{{ ansible_facts['hostname'] | default('n/a') }}"
-          default_ipv4: "{{ ansible_facts['default_ipv4']['address'] | default('n/a') }}"
-          distribution: "{{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}"
+          hostname: "{{ ansible_facts.get('hostname', 'n/a') }}"
+          default_ipv4: "{{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}"
+          distribution: "{{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}"
           app_private_node: "{{ app_private_node | default('not_set') }}"
           app_has_public_ip: "{{ app_has_public_ip | default('not_set') }}"
           app_private_egress_mode: "{{ app_private_egress_mode | default('not_set') }}"
@@ -26,6 +26,7 @@
           - ca-certificates
           - curl
           - gnupg
+          - python3-apt
         state: present
         update_cache: true
 
@@ -43,11 +44,11 @@
 
     - name: Resolve Docker apt architecture
       ansible.builtin.set_fact:
-        docker_apt_arch: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"
+        docker_apt_arch: "{{ 'amd64' if ansible_facts.get('architecture') == 'x86_64' else ansible_facts.get('architecture', 'amd64') }}"
 
     - name: Add Docker apt repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch={{ docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} {{ docker_apt_channel }}"
+        repo: "deb [arch={{ docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts.get('distribution_release', 'jammy') }} {{ docker_apt_channel }}"
         filename: docker
         state: present
         update_cache: true
@@ -131,9 +132,9 @@
           environment={{ environment_name }}
           inventory_hostname={{ inventory_hostname }}
           ansible_host={{ ansible_host | default('n/a') }}
-          hostname={{ ansible_facts['hostname'] | default('n/a') }}
-          default_ipv4={{ ansible_facts['default_ipv4']['address'] | default('n/a') }}
-          distribution={{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}
+          hostname={{ ansible_facts.get('hostname', 'n/a') }}
+          default_ipv4={{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}
+          distribution={{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}
           app_private_node={{ app_private_node | default('not_set') }}
           app_has_public_ip={{ app_has_public_ip | default('not_set') }}
           app_private_egress_mode={{ app_private_egress_mode | default('not_set') }}
