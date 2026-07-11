@@ -1,0 +1,203 @@
+---
+- name: Configure lab-full-min Nginx HTTPS reverse proxy
+  hosts: web
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert app inventory group exists
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['app'] | length > 0
+        fail_msg: app group must exist before configuring Nginx upstream.
+
+    - name: Assert app hosts have ansible_host values
+      ansible.builtin.assert:
+        that:
+          - hostvars[item].ansible_host is defined
+          - hostvars[item].ansible_host | length > 0
+        fail_msg: "Each app host must define ansible_host for Nginx upstream rendering."
+      loop: "{{ groups['app'] }}"
+
+  tasks:
+    - name: Install Nginx and TLS utilities
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - openssl
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Ensure Nginx TLS directory exists
+      ansible.builtin.file:
+        path: "{{ nginx_ops_ssl_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Generate self-signed TLS certificate for lab validation
+      ansible.builtin.command: >-
+        openssl req -x509 -nodes -newkey rsa:2048
+        -keyout {{ nginx_ops_ssl_key }}
+        -out {{ nginx_ops_ssl_cert }}
+        -days {{ nginx_ops_self_signed_days }}
+        -subj {{ nginx_ops_tls_subject }}
+      args:
+        creates: "{{ nginx_ops_ssl_cert }}"
+      notify: Reload Nginx
+
+    - name: Ensure TLS private key permissions
+      ansible.builtin.file:
+        path: "{{ nginx_ops_ssl_key }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Ensure TLS certificate permissions
+      ansible.builtin.file:
+        path: "{{ nginx_ops_ssl_cert }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Remove default Nginx site
+      ansible.builtin.file:
+        path: "{{ nginx_ops_default_site }}"
+        state: absent
+      notify: Reload Nginx
+
+    - name: Install Nginx reverse proxy configuration
+      ansible.builtin.template:
+        src: ../templates/nginx-ops-sample-service.conf.j2
+        dest: "{{ nginx_ops_site_available }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload Nginx
+
+    - name: Enable Nginx reverse proxy site
+      ansible.builtin.file:
+        src: "{{ nginx_ops_site_available }}"
+        dest: "{{ nginx_ops_site_enabled }}"
+        state: link
+        owner: root
+        group: root
+      notify: Reload Nginx
+
+    - name: Validate Nginx configuration
+      ansible.builtin.command: nginx -t
+      register: nginx_config_test
+      changed_when: false
+
+    - name: Flush Nginx handlers before runtime checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure Nginx is enabled and started
+      ansible.builtin.service:
+        name: "{{ nginx_service_name }}"
+        enabled: true
+        state: started
+
+    - name: Wait for HTTPS port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ nginx_ops_https_port }}"
+        timeout: 60
+
+    - name: Check HTTP to HTTPS redirect status
+      ansible.builtin.command: >-
+        curl -sS -o /dev/null -w '%{http_code}' {{ nginx_ops_local_http_url }}
+      register: nginx_http_redirect_check
+      changed_when: false
+      failed_when: nginx_http_redirect_check.stdout not in ['301', '308']
+
+    - name: Check Nginx local HTTPS health proxy
+      ansible.builtin.command: "curl -k -fsS {{ nginx_ops_local_https_health_url }}"
+      register: nginx_https_health_check
+      changed_when: false
+      failed_when: nginx_ops_expect_upstream_ready | bool and nginx_https_health_check.rc != 0
+
+    - name: Check Nginx local HTTPS node proxy
+      ansible.builtin.command: "curl -k -fsS {{ nginx_ops_local_https_node_url }}"
+      register: nginx_https_node_check
+      changed_when: false
+      failed_when: nginx_ops_expect_upstream_ready | bool and nginx_https_node_check.rc != 0
+
+    - name: Check Nginx local HTTPS DB-backed summary proxy
+      ansible.builtin.command: "curl -k -fsS {{ nginx_ops_local_https_summary_url }}"
+      register: nginx_https_summary_check
+      changed_when: false
+      failed_when: nginx_ops_expect_upstream_ready | bool and nginx_https_summary_check.rc != 0
+
+    - name: Check Nginx service state
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_service_state
+      changed_when: false
+
+    - name: Read recent Nginx access log lines
+      ansible.builtin.shell: "tail -n 5 {{ nginx_ops_access_log }} 2>/dev/null || true"
+      register: nginx_access_log_tail
+      changed_when: false
+
+    - name: Read recent Nginx error log lines
+      ansible.builtin.shell: "tail -n 5 {{ nginx_ops_error_log }} 2>/dev/null || true"
+      register: nginx_error_log_tail
+      changed_when: false
+
+    - name: Create Nginx validation report directory
+      ansible.builtin.file:
+        path: "{{ nginx_ops_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write Nginx reverse proxy validation report
+      ansible.builtin.copy:
+        dest: "{{ nginx_ops_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          node_role={{ node_role | default('web') }}
+          node_tier={{ node_tier | default('public-web') }}
+          nginx_service_state={{ nginx_service_state.stdout | default('n/a') }}
+          http_port={{ nginx_ops_http_port }}
+          https_port={{ nginx_ops_https_port }}
+          upstream_name={{ nginx_ops_upstream_name }}
+          upstream_hosts={{ groups['app'] | join(',') }}
+          upstream_app_port={{ nginx_ops_app_port }}
+          redirect_status={{ nginx_http_redirect_check.stdout | default('n/a') }}
+          https_health_rc={{ nginx_https_health_check.rc | default('n/a') }}
+          https_node_rc={{ nginx_https_node_check.rc | default('n/a') }}
+          https_summary_rc={{ nginx_https_summary_check.rc | default('n/a') }}
+          access_log={{ nginx_ops_access_log }}
+          error_log={{ nginx_ops_error_log }}
+          config_test={{ nginx_config_test.stderr | default(nginx_config_test.stdout) | default('n/a') }}
+
+    - name: Display Nginx reverse proxy validation report
+      ansible.builtin.command: "cat {{ nginx_ops_report_file }}"
+      register: nginx_report
+      changed_when: false
+
+    - name: Show Nginx reverse proxy validation report
+      ansible.builtin.debug:
+        var: nginx_report.stdout_lines
+
+    - name: Show recent Nginx access log lines
+      ansible.builtin.debug:
+        var: nginx_access_log_tail.stdout_lines
+
+    - name: Show recent Nginx error log lines
+      ansible.builtin.debug:
+        var: nginx_error_log_tail.stdout_lines
+
+  handlers:
+    - name: Reload Nginx
+      ansible.builtin.service:
+        name: "{{ nginx_service_name }}"
+        state: reloaded
