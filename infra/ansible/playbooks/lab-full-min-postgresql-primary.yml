@@ -10,9 +10,11 @@
         that:
           - ops_db_password is defined
           - ops_db_password | length >= 12
+          - ops_db_password is match('^[A-Za-z0-9_@#%+=:,.-]+$')
         fail_msg: >-
           ops_db_password must be supplied from ignored inventory, --extra-vars,
-          or future Ansible Vault. Do not commit a real DB password.
+          or future Ansible Vault. Use at least 12 characters and avoid quotes,
+          whitespace, and shell-sensitive characters. Do not commit a real DB password.
 
   tasks:
     - name: Install PostgreSQL packages
@@ -74,10 +76,11 @@
     - name: Flush PostgreSQL handlers before DB/user creation
       ansible.builtin.meta: flush_handlers
 
-    - name: Create ops database user
-      ansible.builtin.command: >-
-        sudo -u postgres psql -tAc
-        "DO \$\$
+    - name: Create or update ops database user
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+        DO \$\$
         BEGIN
           IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ ops_db_user }}') THEN
             CREATE ROLE {{ ops_db_user }} LOGIN PASSWORD '{{ ops_db_password }}';
@@ -85,20 +88,26 @@
             ALTER ROLE {{ ops_db_user }} WITH LOGIN PASSWORD '{{ ops_db_password }}';
           END IF;
         END
-        \$\$;"
-      changed_when: true
+        \$\$;
+        SQL
+      args:
+        executable: /bin/bash
+      changed_when: false
       no_log: true
 
-    - name: Create ops database
-      ansible.builtin.command: >-
-        sudo -u postgres psql -tAc
-        "SELECT 'CREATE DATABASE {{ ops_db_name }} OWNER {{ ops_db_user }}'
-         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ ops_db_name }}')" |
-        sudo -u postgres psql
+    - name: Create ops database when missing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ ops_db_name }}'" | grep -q 1; then
+          echo database_exists
+        else
+          sudo -u postgres createdb -O {{ ops_db_user }} {{ ops_db_name }}
+          echo database_created
+        fi
       args:
         executable: /bin/bash
       register: create_db_result
-      changed_when: "'CREATE DATABASE' in create_db_result.stdout"
+      changed_when: "'database_created' in create_db_result.stdout"
 
     - name: Grant database privileges to ops user
       ansible.builtin.command: >-
