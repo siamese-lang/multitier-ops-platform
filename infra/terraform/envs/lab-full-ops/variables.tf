@@ -34,7 +34,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidr" {
-  description = "CIDR block for the public subnet that hosts bastion-01, nginx-01, and NAT Gateway."
+  description = "CIDR block for the public subnet that hosts bastion-01 and nginx-01."
   type        = string
   default     = "10.50.1.0/24"
 
@@ -45,7 +45,7 @@ variable "public_subnet_cidr" {
 }
 
 variable "private_app_subnet_cidr" {
-  description = "CIDR block for the private app subnet that hosts app-01 and app-02."
+  description = "CIDR block for the private app subnet that hosts app nodes."
   type        = string
   default     = "10.50.11.0/24"
 
@@ -67,7 +67,7 @@ variable "private_db_subnet_cidr" {
 }
 
 variable "private_storage_subnet_cidr" {
-  description = "CIDR block for the private storage subnet that hosts nfs-01."
+  description = "CIDR block for the private storage subnet that hosts nfs-01 when enabled."
   type        = string
   default     = "10.50.31.0/24"
 
@@ -78,7 +78,7 @@ variable "private_storage_subnet_cidr" {
 }
 
 variable "private_ops_subnet_cidr" {
-  description = "CIDR block for the private ops subnet that hosts backup-01, mon-01, log-01, and loadgen-01."
+  description = "CIDR block for the private ops subnet that hosts backup, monitoring, logging, and load generation nodes when enabled."
   type        = string
   default     = "10.50.41.0/24"
 
@@ -113,58 +113,100 @@ variable "key_name" {
   type        = string
 }
 
+variable "enable_nat_gateway" {
+  description = "Create a NAT Gateway and private default routes. Disabled by default to avoid NAT Gateway hourly charges in Free Tier validation."
+  type        = bool
+  default     = false
+}
+
+variable "enable_app_02" {
+  description = "Create app-02. Disabled by default for reduced Free Tier validation."
+  type        = bool
+  default     = false
+}
+
+variable "enable_storage_node" {
+  description = "Create nfs-01 for storage-tier validation."
+  type        = bool
+  default     = true
+}
+
+variable "enable_backup_node" {
+  description = "Create backup-01 for backup-tier validation."
+  type        = bool
+  default     = true
+}
+
+variable "enable_monitoring_node" {
+  description = "Create mon-01. Disabled by default for reduced Free Tier validation."
+  type        = bool
+  default     = false
+}
+
+variable "enable_logging_node" {
+  description = "Create log-01. Disabled by default for reduced Free Tier validation."
+  type        = bool
+  default     = false
+}
+
+variable "enable_loadgen_node" {
+  description = "Create loadgen-01. Disabled by default for reduced Free Tier validation."
+  type        = bool
+  default     = false
+}
+
 variable "bastion_instance_type" {
-  description = "EC2 instance type for bastion-01. The default keeps the full 10-node skeleton under common 16 vCPU lab quotas."
+  description = "EC2 instance type for bastion-01. Default uses t3.micro because the account rejected t2.micro as not Free Tier eligible."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "nginx_instance_type" {
   description = "EC2 instance type for nginx-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "app_instance_type" {
-  description = "EC2 instance type for app-01 and app-02."
+  description = "EC2 instance type for app nodes."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "db_instance_type" {
   description = "EC2 instance type for db-primary-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "storage_instance_type" {
   description = "EC2 instance type for nfs-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "backup_instance_type" {
   description = "EC2 instance type for backup-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "monitoring_instance_type" {
   description = "EC2 instance type for mon-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "logging_instance_type" {
   description = "EC2 instance type for log-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "loadgen_instance_type" {
   description = "EC2 instance type for loadgen-01."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "web_port" {
@@ -180,7 +222,7 @@ variable "web_https_port" {
 }
 
 variable "app_port" {
-  description = "Application HTTP port used by app-01 and app-02."
+  description = "Application HTTP port used by app nodes."
   type        = number
   default     = 8080
 }
@@ -224,7 +266,7 @@ variable "ubuntu_ami_name_pattern" {
 variable "root_volume_size_gib" {
   description = "Default root EBS volume size for lab-full-ops EC2 instances."
   type        = number
-  default     = 20
+  default     = 8
 
   validation {
     condition     = var.root_volume_size_gib >= 8
@@ -233,9 +275,9 @@ variable "root_volume_size_gib" {
 }
 
 variable "storage_root_volume_size_gib" {
-  description = "Root EBS volume size for nfs-01. A later issue may add a separate data volume if needed for restore evidence."
+  description = "Root EBS volume size for nfs-01. Increase only for a specific storage validation run."
   type        = number
-  default     = 30
+  default     = 8
 
   validation {
     condition     = var.storage_root_volume_size_gib >= 8
@@ -244,9 +286,9 @@ variable "storage_root_volume_size_gib" {
 }
 
 variable "backup_root_volume_size_gib" {
-  description = "Root EBS volume size for backup-01. A later issue may add a persistent backup volume or artifact export path."
+  description = "Root EBS volume size for backup-01. Increase only for a specific backup validation run."
   type        = number
-  default     = 30
+  default     = 8
 
   validation {
     condition     = var.backup_root_volume_size_gib >= 8
