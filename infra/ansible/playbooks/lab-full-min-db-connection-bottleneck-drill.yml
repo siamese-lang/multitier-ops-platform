@@ -1,0 +1,260 @@
+---
+- name: Run lab-full-min DB connection bottleneck drill through Nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    db_bottleneck_drill_request_count: 80
+    db_bottleneck_drill_concurrency: 16
+    db_bottleneck_drill_request_prefix: lab-full-min-db-bottleneck
+    db_bottleneck_drill_https_summary_url: https://127.0.0.1/api/work-orders/summary
+    db_bottleneck_drill_https_health_url: https://127.0.0.1/healthz
+    db_bottleneck_drill_access_log: /var/log/nginx/ops_access.log
+    db_bottleneck_drill_error_log: /var/log/nginx/ops_error.log
+    db_bottleneck_drill_report_dir: /tmp/multitier-ops-platform
+    db_bottleneck_drill_report_file: "{{ db_bottleneck_drill_report_dir }}/lab-full-min-db-connection-bottleneck-drill-{{ inventory_hostname }}.txt"
+    db_bottleneck_drill_result_file: "{{ db_bottleneck_drill_report_dir }}/lab-full-min-db-connection-bottleneck-results.tsv"
+    db_bottleneck_drill_pg_log_tail_lines: 80
+    db_bottleneck_drill_nginx_log_tail_lines: 120
+    db_bottleneck_drill_app_journal_tail_lines: 80
+
+  pre_tasks:
+    - name: Assert app and DB inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['app'] | length >= 2
+          - groups['db'] is defined
+          - groups['db'] | length >= 1
+        fail_msg: app and db inventory groups must exist before running this drill.
+
+    - name: Assert db-primary-01 exists
+      ansible.builtin.assert:
+        that:
+          - "'db-primary-01' in groups['db']"
+        fail_msg: db-primary-01 must exist in the db inventory group.
+
+  tasks:
+    - name: Check Nginx service before drill
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_pre_state
+      changed_when: false
+      failed_when: nginx_pre_state.stdout != 'active'
+
+    - name: Check app service states before drill
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['app'] }}"
+      register: app_pre_states
+      changed_when: false
+      failed_when: app_pre_states.rc != 0
+
+    - name: Check PostgreSQL service before drill
+      ansible.builtin.command: systemctl is-active postgresql
+      delegate_to: db-primary-01
+      register: postgresql_pre_state
+      changed_when: false
+      failed_when: postgresql_pre_state.stdout != 'active'
+
+    - name: Check baseline HTTPS health through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ db_bottleneck_drill_https_health_url }}"
+      register: baseline_health_check
+      changed_when: false
+
+    - name: Check baseline DB-backed summary through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ db_bottleneck_drill_https_summary_url }}"
+      register: baseline_summary_check
+      changed_when: false
+
+    - name: Capture PostgreSQL activity before load
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d opsdb -Atc "select 'opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb';"
+        sudo -u postgres psql -d opsdb -Atc "select 'active_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'active';"
+        sudo -u postgres psql -d opsdb -Atc "select 'idle_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'idle';"
+      args:
+        executable: /bin/bash
+      delegate_to: db-primary-01
+      register: pg_activity_before
+      changed_when: false
+
+    - name: Ensure DB bottleneck drill report directory exists
+      ansible.builtin.file:
+        path: "{{ db_bottleneck_drill_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Run concurrent DB-backed requests through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -f "{{ db_bottleneck_drill_result_file }}"
+
+        run_request() {
+          local i="$1"
+          local request_id="{{ db_bottleneck_drill_request_prefix }}-${i}"
+          local output
+          local rc=0
+
+          output=$(curl -k -sS -o /dev/null \
+            -w "%{http_code}\t%{time_total}\t%{size_download}" \
+            -H "X-Request-Id: ${request_id}" \
+            "{{ db_bottleneck_drill_https_summary_url }}") || rc=$?
+
+          if [ "$rc" -ne 0 ]; then
+            printf "%s\t000\t0.000000\t0\tcurl_rc_%s\n" "$request_id" "$rc"
+          else
+            printf "%s\t%s\tok\n" "$request_id" "$output"
+          fi
+        }
+
+        export -f run_request
+        seq 1 {{ db_bottleneck_drill_request_count }} | \
+          xargs -I{} -P {{ db_bottleneck_drill_concurrency }} bash -c 'run_request "$@"' _ {} | \
+          tee "{{ db_bottleneck_drill_result_file }}"
+      args:
+        executable: /bin/bash
+      register: db_bottleneck_requests
+      changed_when: false
+
+    - name: Summarize concurrent request results
+      ansible.builtin.shell: |
+        set -euo pipefail
+        awk -F '\t' '
+          BEGIN { count=0; success=0; failure=0; sum=0; max=0; min=-1; }
+          {
+            count++;
+            code=$2;
+            duration=$3 + 0;
+            codes[code]++;
+            if (code == "200") { success++; } else { failure++; }
+            sum += duration;
+            if (duration > max) { max = duration; }
+            if (min < 0 || duration < min) { min = duration; }
+          }
+          END {
+            print "request_count=" count;
+            print "success_count=" success;
+            print "failure_count=" failure;
+            if (count > 0) {
+              printf "avg_time_sec=%.6f\n", sum / count;
+              printf "min_time_sec=%.6f\n", min;
+              printf "max_time_sec=%.6f\n", max;
+            } else {
+              print "avg_time_sec=0";
+              print "min_time_sec=0";
+              print "max_time_sec=0";
+            }
+            for (code in codes) {
+              print "http_" code "=" codes[code];
+            }
+          }
+        ' "{{ db_bottleneck_drill_result_file }}"
+      args:
+        executable: /bin/bash
+      register: db_bottleneck_summary
+      changed_when: false
+
+    - name: Capture PostgreSQL activity after load
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d opsdb -Atc "select 'opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb';"
+        sudo -u postgres psql -d opsdb -Atc "select 'active_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'active';"
+        sudo -u postgres psql -d opsdb -Atc "select 'idle_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'idle';"
+        sudo -u postgres psql -d opsdb -Atc "select 'max_conn_setting=' || setting from pg_settings where name = 'max_connections';"
+      args:
+        executable: /bin/bash
+      delegate_to: db-primary-01
+      register: pg_activity_after
+      changed_when: false
+
+    - name: Capture PostgreSQL log tail
+      ansible.builtin.shell: |
+        set -euo pipefail
+        log_file=$(ls -1 /var/log/postgresql/postgresql-*-main.log 2>/dev/null | tail -n 1 || true)
+        if [ -n "$log_file" ]; then
+          echo "postgresql_log_file=${log_file}"
+          tail -n {{ db_bottleneck_drill_pg_log_tail_lines }} "$log_file"
+        else
+          echo "postgresql_log_file=not_found"
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: db-primary-01
+      register: pg_log_tail
+      changed_when: false
+
+    - name: Capture Nginx access log tail
+      ansible.builtin.shell: "tail -n {{ db_bottleneck_drill_nginx_log_tail_lines }} {{ db_bottleneck_drill_access_log }} 2>/dev/null || true"
+      register: nginx_access_log_tail
+      changed_when: false
+
+    - name: Capture Nginx error log tail
+      ansible.builtin.shell: "tail -n {{ db_bottleneck_drill_nginx_log_tail_lines }} {{ db_bottleneck_drill_error_log }} 2>/dev/null || true"
+      register: nginx_error_log_tail
+      changed_when: false
+
+    - name: Capture app journal samples after load
+      ansible.builtin.shell: "journalctl -u ops-sample-service -n {{ db_bottleneck_drill_app_journal_tail_lines }} --no-pager 2>/dev/null | grep '{{ db_bottleneck_drill_request_prefix }}' || true"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['app'] }}"
+      register: app_journal_samples
+      changed_when: false
+
+    - name: Check post-load DB-backed summary through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ db_bottleneck_drill_https_summary_url }}"
+      register: post_load_summary_check
+      changed_when: false
+
+    - name: Write DB connection bottleneck drill report
+      ansible.builtin.copy:
+        dest: "{{ db_bottleneck_drill_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          drill=db_connection_bottleneck_nginx_to_app_to_postgresql
+          nginx_pre_state={{ nginx_pre_state.stdout | default('n/a') }}
+          postgresql_pre_state={{ postgresql_pre_state.stdout | default('n/a') }}
+          baseline_health_rc={{ baseline_health_check.rc | default('n/a') }}
+          baseline_summary_rc={{ baseline_summary_check.rc | default('n/a') }}
+          request_count={{ db_bottleneck_drill_request_count }}
+          concurrency={{ db_bottleneck_drill_concurrency }}
+          request_prefix={{ db_bottleneck_drill_request_prefix }}
+          result_file={{ db_bottleneck_drill_result_file }}
+          post_load_summary_rc={{ post_load_summary_check.rc | default('n/a') }}
+          access_log={{ db_bottleneck_drill_access_log }}
+          error_log={{ db_bottleneck_drill_error_log }}
+          --- request_summary ---
+          {{ db_bottleneck_summary.stdout | default('n/a') }}
+          --- pg_activity_before ---
+          {{ pg_activity_before.stdout | default('n/a') }}
+          --- pg_activity_after ---
+          {{ pg_activity_after.stdout | default('n/a') }}
+
+    - name: Display DB connection bottleneck drill report
+      ansible.builtin.command: "cat {{ db_bottleneck_drill_report_file }}"
+      register: db_bottleneck_report
+      changed_when: false
+
+    - name: Show DB connection bottleneck drill report
+      ansible.builtin.debug:
+        var: db_bottleneck_report.stdout_lines
+
+    - name: Show PostgreSQL log tail
+      ansible.builtin.debug:
+        var: pg_log_tail.stdout_lines
+
+    - name: Show Nginx access log tail
+      ansible.builtin.debug:
+        var: nginx_access_log_tail.stdout_lines
+
+    - name: Show Nginx error log tail
+      ansible.builtin.debug:
+        var: nginx_error_log_tail.stdout_lines
+
+    - name: Show app journal samples
+      ansible.builtin.debug:
+        var: app_journal_samples.results
