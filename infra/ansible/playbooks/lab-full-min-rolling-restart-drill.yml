@@ -1,0 +1,346 @@
+---
+- name: Run lab-full-min rolling restart drill through Nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    rolling_first_target: app-01
+    rolling_first_survivor: app-02
+    rolling_second_target: app-02
+    rolling_second_survivor: app-01
+    rolling_app_service_name: ops-sample-service
+
+    rolling_drill_request_count: 6
+    rolling_drill_pause_seconds: 1
+    rolling_drill_request_prefix: lab-full-min-rolling-restart
+
+    rolling_drill_https_health_url: https://127.0.0.1/healthz
+    rolling_drill_https_node_url: https://127.0.0.1/node
+    rolling_drill_https_summary_url: https://127.0.0.1/api/work-orders/summary
+
+    rolling_drill_access_log: /var/log/nginx/ops_access.log
+    rolling_drill_error_log: /var/log/nginx/ops_error.log
+    rolling_drill_report_dir: /tmp/multitier-ops-platform
+    rolling_drill_report_file: "{{ rolling_drill_report_dir }}/lab-full-min-rolling-restart-drill-{{ inventory_hostname }}.txt"
+
+  pre_tasks:
+    - name: Assert app inventory group exists
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['app'] | length >= 2
+        fail_msg: app group must contain at least two app nodes before running this drill.
+
+    - name: Assert rolling targets exist
+      ansible.builtin.assert:
+        that:
+          - rolling_first_target in groups['app']
+          - rolling_first_survivor in groups['app']
+          - rolling_second_target in groups['app']
+          - rolling_second_survivor in groups['app']
+        fail_msg: rolling targets must exist in the app inventory group.
+
+    - name: Assert rolling target and survivor pairs are different
+      ansible.builtin.assert:
+        that:
+          - rolling_first_target != rolling_first_survivor
+          - rolling_second_target != rolling_second_survivor
+        fail_msg: each rolling target and survivor pair must use different hosts.
+
+  tasks:
+    - name: Check Nginx service before drill
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_pre_state
+      changed_when: false
+
+    - name: Check app service state before drill
+      ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+      delegate_to: "{{ item }}"
+      loop:
+        - "{{ rolling_first_target }}"
+        - "{{ rolling_second_target }}"
+      register: app_pre_states
+      changed_when: false
+      failed_when: app_pre_states.rc != 0
+
+    - name: Check baseline HTTPS health through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ rolling_drill_https_health_url }}"
+      register: baseline_health_check
+      changed_when: false
+
+    - name: Check baseline HTTPS DB-backed summary through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ rolling_drill_https_summary_url }}"
+      register: baseline_summary_check
+      changed_when: false
+
+    - name: Rolling restart first app node and keep service through survivor
+      block:
+        - name: Stop first rolling target app service
+          ansible.builtin.service:
+            name: "{{ rolling_app_service_name }}"
+            state: stopped
+          delegate_to: "{{ rolling_first_target }}"
+
+        - name: Confirm first rolling target is inactive
+          ansible.builtin.shell: "systemctl is-active {{ rolling_app_service_name }} || true"
+          delegate_to: "{{ rolling_first_target }}"
+          register: first_target_stopped_state
+          changed_when: false
+          failed_when: first_target_stopped_state.stdout == 'active'
+
+        - name: Confirm first survivor remains active
+          ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+          delegate_to: "{{ rolling_first_survivor }}"
+          register: first_survivor_state
+          changed_when: false
+          failed_when: first_survivor_state.stdout != 'active'
+
+        - name: Allow Nginx passive upstream handling to observe first target stop
+          ansible.builtin.pause:
+            seconds: 2
+
+        - name: Send HTTPS requests through Nginx while first target is stopped
+          ansible.builtin.shell: |
+            set -euo pipefail
+
+            curl_with_retry() {
+              local url="$1"
+              local request_id="$2"
+              local attempt
+
+              for attempt in 1 2 3; do
+                if curl -k -fsS -H "X-Request-Id: ${request_id}" "$url"; then
+                  return 0
+                fi
+                sleep 1
+              done
+
+              return 1
+            }
+
+            for i in $(seq 1 {{ rolling_drill_request_count }}); do
+              health_request_id="{{ rolling_drill_request_prefix }}-app01-${i}-healthz"
+              node_request_id="{{ rolling_drill_request_prefix }}-app01-${i}-node"
+              summary_request_id="{{ rolling_drill_request_prefix }}-app01-${i}-summary"
+
+              echo "--- app-01 window request ${i} healthz ---"
+              curl_with_retry "{{ rolling_drill_https_health_url }}" "${health_request_id}"
+              echo
+
+              echo "--- app-01 window request ${i} node ---"
+              curl_with_retry "{{ rolling_drill_https_node_url }}" "${node_request_id}"
+              echo
+
+              echo "--- app-01 window request ${i} summary ---"
+              curl_with_retry "{{ rolling_drill_https_summary_url }}" "${summary_request_id}"
+              echo
+
+              sleep {{ rolling_drill_pause_seconds }}
+            done
+          args:
+            executable: /bin/bash
+          register: first_window_requests
+          changed_when: false
+
+      always:
+        - name: Start first rolling target app service
+          ansible.builtin.service:
+            name: "{{ rolling_app_service_name }}"
+            state: started
+          delegate_to: "{{ rolling_first_target }}"
+
+        - name: Wait for first rolling target app HTTP port after recovery
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[rolling_first_target].ansible_host }}"
+            port: "{{ hostvars[rolling_first_target].expected_app_port | default(8080) }}"
+            timeout: 60
+          delegate_to: "{{ rolling_first_target }}"
+
+        - name: Confirm first rolling target is active after recovery
+          ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+          delegate_to: "{{ rolling_first_target }}"
+          register: first_target_recovered_state
+          changed_when: false
+
+    - name: Check HTTPS summary through Nginx after first node recovery
+      ansible.builtin.command: "curl -k -fsS {{ rolling_drill_https_summary_url }}"
+      register: after_first_recovery_summary_check
+      changed_when: false
+
+    - name: Rolling restart second app node and keep service through survivor
+      block:
+        - name: Stop second rolling target app service
+          ansible.builtin.service:
+            name: "{{ rolling_app_service_name }}"
+            state: stopped
+          delegate_to: "{{ rolling_second_target }}"
+
+        - name: Confirm second rolling target is inactive
+          ansible.builtin.shell: "systemctl is-active {{ rolling_app_service_name }} || true"
+          delegate_to: "{{ rolling_second_target }}"
+          register: second_target_stopped_state
+          changed_when: false
+          failed_when: second_target_stopped_state.stdout == 'active'
+
+        - name: Confirm second survivor remains active
+          ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+          delegate_to: "{{ rolling_second_survivor }}"
+          register: second_survivor_state
+          changed_when: false
+          failed_when: second_survivor_state.stdout != 'active'
+
+        - name: Allow Nginx passive upstream handling to observe second target stop
+          ansible.builtin.pause:
+            seconds: 2
+
+        - name: Send HTTPS requests through Nginx while second target is stopped
+          ansible.builtin.shell: |
+            set -euo pipefail
+
+            curl_with_retry() {
+              local url="$1"
+              local request_id="$2"
+              local attempt
+
+              for attempt in 1 2 3; do
+                if curl -k -fsS -H "X-Request-Id: ${request_id}" "$url"; then
+                  return 0
+                fi
+                sleep 1
+              done
+
+              return 1
+            }
+
+            for i in $(seq 1 {{ rolling_drill_request_count }}); do
+              health_request_id="{{ rolling_drill_request_prefix }}-app02-${i}-healthz"
+              node_request_id="{{ rolling_drill_request_prefix }}-app02-${i}-node"
+              summary_request_id="{{ rolling_drill_request_prefix }}-app02-${i}-summary"
+
+              echo "--- app-02 window request ${i} healthz ---"
+              curl_with_retry "{{ rolling_drill_https_health_url }}" "${health_request_id}"
+              echo
+
+              echo "--- app-02 window request ${i} node ---"
+              curl_with_retry "{{ rolling_drill_https_node_url }}" "${node_request_id}"
+              echo
+
+              echo "--- app-02 window request ${i} summary ---"
+              curl_with_retry "{{ rolling_drill_https_summary_url }}" "${summary_request_id}"
+              echo
+
+              sleep {{ rolling_drill_pause_seconds }}
+            done
+          args:
+            executable: /bin/bash
+          register: second_window_requests
+          changed_when: false
+
+      always:
+        - name: Start second rolling target app service
+          ansible.builtin.service:
+            name: "{{ rolling_app_service_name }}"
+            state: started
+          delegate_to: "{{ rolling_second_target }}"
+
+        - name: Wait for second rolling target app HTTP port after recovery
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[rolling_second_target].ansible_host }}"
+            port: "{{ hostvars[rolling_second_target].expected_app_port | default(8080) }}"
+            timeout: 60
+          delegate_to: "{{ rolling_second_target }}"
+
+        - name: Confirm second rolling target is active after recovery
+          ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+          delegate_to: "{{ rolling_second_target }}"
+          register: second_target_recovered_state
+          changed_when: false
+
+    - name: Check HTTPS summary through Nginx after second node recovery
+      ansible.builtin.command: "curl -k -fsS {{ rolling_drill_https_summary_url }}"
+      register: after_second_recovery_summary_check
+      changed_when: false
+
+    - name: Confirm all app nodes are active after rolling drill
+      ansible.builtin.command: "systemctl is-active {{ rolling_app_service_name }}"
+      delegate_to: "{{ item }}"
+      loop:
+        - "{{ rolling_first_target }}"
+        - "{{ rolling_second_target }}"
+      register: final_app_states
+      changed_when: false
+      failed_when: final_app_states.rc != 0
+
+    - name: Read Nginx access log after rolling drill
+      ansible.builtin.shell: "tail -n 120 {{ rolling_drill_access_log }} 2>/dev/null || true"
+      register: rolling_access_log_tail
+      changed_when: false
+
+    - name: Read Nginx error log after rolling drill
+      ansible.builtin.shell: "tail -n 120 {{ rolling_drill_error_log }} 2>/dev/null || true"
+      register: rolling_error_log_tail
+      changed_when: false
+
+    - name: Create rolling restart drill report directory
+      ansible.builtin.file:
+        path: "{{ rolling_drill_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write rolling restart drill report
+      ansible.builtin.copy:
+        dest: "{{ rolling_drill_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          drill=rolling_restart_nginx_upstream_continuity
+          app_service_name={{ rolling_app_service_name }}
+          first_target={{ rolling_first_target }}
+          first_survivor={{ rolling_first_survivor }}
+          second_target={{ rolling_second_target }}
+          second_survivor={{ rolling_second_survivor }}
+          nginx_pre_state={{ nginx_pre_state.stdout | default('n/a') }}
+          baseline_health_rc={{ baseline_health_check.rc | default('n/a') }}
+          baseline_summary_rc={{ baseline_summary_check.rc | default('n/a') }}
+          first_target_stopped_state={{ first_target_stopped_state.stdout | default('n/a') }}
+          first_survivor_state={{ first_survivor_state.stdout | default('n/a') }}
+          first_window_requests_rc={{ first_window_requests.rc | default('n/a') }}
+          first_target_recovered_state={{ first_target_recovered_state.stdout | default('n/a') }}
+          after_first_recovery_summary_rc={{ after_first_recovery_summary_check.rc | default('n/a') }}
+          second_target_stopped_state={{ second_target_stopped_state.stdout | default('n/a') }}
+          second_survivor_state={{ second_survivor_state.stdout | default('n/a') }}
+          second_window_requests_rc={{ second_window_requests.rc | default('n/a') }}
+          second_target_recovered_state={{ second_target_recovered_state.stdout | default('n/a') }}
+          after_second_recovery_summary_rc={{ after_second_recovery_summary_check.rc | default('n/a') }}
+          request_count_per_window={{ rolling_drill_request_count }}
+          access_log={{ rolling_drill_access_log }}
+          error_log={{ rolling_drill_error_log }}
+
+    - name: Display rolling restart drill report
+      ansible.builtin.command: "cat {{ rolling_drill_report_file }}"
+      register: rolling_drill_report
+      changed_when: false
+
+    - name: Show rolling restart drill report
+      ansible.builtin.debug:
+        var: rolling_drill_report.stdout_lines
+
+    - name: Show first rolling window request outputs
+      ansible.builtin.debug:
+        var: first_window_requests.stdout_lines
+
+    - name: Show second rolling window request outputs
+      ansible.builtin.debug:
+        var: second_window_requests.stdout_lines
+
+    - name: Show Nginx access log after rolling drill
+      ansible.builtin.debug:
+        var: rolling_access_log_tail.stdout_lines
+
+    - name: Show Nginx error log after rolling drill
+      ansible.builtin.debug:
+        var: rolling_error_log_tail.stdout_lines
