@@ -5,6 +5,10 @@ spring:
   application:
     name: ops-sample-service
 
+ops:
+  file-probe:
+    root: ${OPS_FILE_PROBE_ROOT:/mnt/ops-sample/files}
+
 logging:
   level:
     root: INFO
