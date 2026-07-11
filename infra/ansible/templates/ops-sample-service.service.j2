@@ -1,0 +1,34 @@
+[Unit]
+Description=ops-sample-service for lab-full-min
+Documentation=https://github.com/siamese-lang/multitier-ops-platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ ops_app_user }}
+Group={{ ops_app_group }}
+WorkingDirectory={{ ops_app_home }}
+EnvironmentFile={{ ops_app_config_dir }}/ops-sample-service.env
+ExecStart=/usr/bin/java -jar {{ ops_app_jar_dest }}
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Write application logs to journald. Incident evidence is collected with journalctl.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ ops_app_name }}
+
+# Conservative service hardening for a lab VM workload.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths={{ ops_app_log_dir }} /tmp
+
+[Install]
+WantedBy=multi-user.target
