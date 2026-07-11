@@ -77,7 +77,8 @@ output "tier_flow_summary" {
   description = "Expected network flow for lab-full-min."
   value = {
     operator_to_bastion = "${var.operator_cidr} -> bastion-01:22"
-    web_to_nginx        = "${var.web_ingress_cidr} -> nginx-01:${var.web_port}"
+    web_to_nginx_http   = "${var.web_ingress_cidr} -> nginx-01:${var.web_port}"
+    web_to_nginx_https  = "${var.web_ingress_cidr} -> nginx-01:${var.web_https_port}"
     bastion_to_nodes    = "bastion SG -> nginx/app/db:22"
     nginx_to_app        = "nginx SG -> app SG:${var.app_port}"
     app_to_db           = "app SG -> db SG:${var.db_port}"
