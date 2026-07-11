@@ -1,0 +1,23 @@
+---
+project_name: multitier-ops-platform
+environment_name: lab-full-ops
+
+lab_full_ops_report_dir: /tmp/multitier-ops-platform
+lab_full_ops_report_file: "{{ lab_full_ops_report_dir }}/lab-full-ops-baseline-{{ inventory_hostname }}.txt"
+
+lab_full_ops_expected_architecture: web-was-db-storage-ops-backup
+lab_full_ops_control_policy: operator-to-bastion-then-tier-nodes
+
+lab_full_ops_expected_groups:
+  - bastion
+  - web
+  - app
+  - db
+  - storage
+  - backup
+  - monitoring
+  - logging
+  - loadgen
+  - ops_nodes
+  - private_nodes
+  - lab_full_ops
