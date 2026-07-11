@@ -1,7 +1,5 @@
 package io.github.siamese_lang.ops;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -15,9 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class OpsController {
 
     private final DbProbe dbProbe;
+    private final NodeIdentity nodeIdentity;
 
-    public OpsController(DbProbe dbProbe) {
+    public OpsController(DbProbe dbProbe, NodeIdentity nodeIdentity) {
         this.dbProbe = dbProbe;
+        this.nodeIdentity = nodeIdentity;
     }
 
     @GetMapping("/healthz")
@@ -43,7 +43,7 @@ public class OpsController {
     @GetMapping("/node")
     public Map<String, Object> node() {
         Map<String, Object> response = baseResponse("up");
-        response.put("node", nodeInfo());
+        response.put("node", nodeIdentity.asMap());
         return response;
     }
 
@@ -64,38 +64,8 @@ public class OpsController {
         response.put("service", "ops-sample-service");
         response.put("status", status);
         response.put("timestamp", OffsetDateTime.now(ZoneOffset.UTC).toString());
-        response.put("version", env("APP_VERSION", "0.1.0-local"));
+        response.put("version", nodeIdentity.version());
+        response.put("node", nodeIdentity.asMap());
         return response;
-    }
-
-    private Map<String, Object> nodeInfo() {
-        Map<String, Object> node = new LinkedHashMap<>();
-        node.put("hostname", hostname());
-        node.put("localAddress", localAddress());
-        node.put("role", env("OPS_NODE_ROLE", "app"));
-        node.put("tier", env("OPS_NODE_TIER", "private-was"));
-        node.put("environment", env("OPS_ENVIRONMENT", "lab-full-min"));
-        return node;
-    }
-
-    private static String hostname() {
-        try {
-            return InetAddress.getLocalHost().getHostName();
-        } catch (UnknownHostException ex) {
-            return "unknown";
-        }
-    }
-
-    private static String localAddress() {
-        try {
-            return InetAddress.getLocalHost().getHostAddress();
-        } catch (UnknownHostException ex) {
-            return "unknown";
-        }
-    }
-
-    private static String env(String key, String fallback) {
-        String value = System.getenv(key);
-        return value == null || value.isBlank() ? fallback : value;
     }
 }
