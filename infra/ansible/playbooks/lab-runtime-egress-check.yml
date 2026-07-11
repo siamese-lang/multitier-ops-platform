@@ -1,0 +1,57 @@
+---
+- name: Verify lab-runtime Ansible control path and NAT egress
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Show host identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host | default('n/a') }}"
+          hostname: "{{ ansible_hostname | default('n/a') }}"
+          default_ipv4: "{{ ansible_default_ipv4.address | default('n/a') }}"
+          distribution: "{{ ansible_distribution | default('n/a') }} {{ ansible_distribution_version | default('n/a') }}"
+          os_family: "{{ ansible_os_family | default('n/a') }}"
+          environment: "{{ environment_name }}"
+
+    - name: Create runtime egress report directory
+      ansible.builtin.file:
+        path: "{{ runtime_egress_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Run HTTPS egress check from private app node
+      ansible.builtin.command: "curl -I {{ runtime_https_check_url }} --max-time 5"
+      changed_when: false
+      register: runtime_https_egress
+      when: runtime_egress_expected | default(false) | bool
+
+    - name: Write lab-runtime egress report
+      ansible.builtin.copy:
+        dest: "{{ runtime_egress_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_hostname | default('n/a') }}
+          default_ipv4={{ ansible_default_ipv4.address | default('n/a') }}
+          distribution={{ ansible_distribution | default('n/a') }} {{ ansible_distribution_version | default('n/a') }}
+          node_role={{ node_role | default('generic') }}
+          app_private_node={{ app_private_node | default('not_app_group') }}
+          app_has_public_ip={{ app_has_public_ip | default('not_app_group') }}
+          app_private_egress_mode={{ app_private_egress_mode | default('not_app_group') }}
+          https_check_url={{ runtime_https_check_url if (runtime_egress_expected | default(false) | bool) else 'not_app_group' }}
+          https_egress_rc={{ runtime_https_egress.rc | default('not_app_group') }}
+          https_egress_first_line={{ (runtime_https_egress.stdout_lines | default(['not_app_group']))[0] }}
+
+    - name: Read lab-runtime egress report
+      ansible.builtin.command: "cat {{ runtime_egress_report_file }}"
+      changed_when: false
+      register: runtime_egress_report
+
+    - name: Display lab-runtime egress report
+      ansible.builtin.debug:
+        var: runtime_egress_report.stdout_lines
