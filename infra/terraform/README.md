@@ -22,6 +22,24 @@ Terraform is responsible for infrastructure resources such as:
 
 Terraform should not install application packages or configure services. Server configuration belongs in Ansible.
 
+## lab-small baseline
+
+The first Terraform implementation should follow:
+
+- `docs/01-architecture/terraform-lab-small-baseline.md`
+- `docs/05-decisions/ADR-0003-terraform-lab-small-baseline.md`
+
+The initial baseline is intentionally smaller than the eventual `lab-small` service topology. It should create only the minimum network and EC2 resources needed to prove repeatable provisioning, controlled SSH access, and private app-node placement.
+
+Initial baseline nodes:
+
+```text
+bastion-01
+app-01
+```
+
+Later issues may extend `lab-small` with Nginx, OpenKoda deployment, database separation, and storage after this baseline has apply, SSH, output, and destroy evidence.
+
 ## Workflow
 
 For each environment:
@@ -51,6 +69,12 @@ Each Terraform issue should include:
 - `terraform apply` result if applied
 - `terraform output` result
 - `terraform destroy` result when teardown is part of the scenario
+
+## State files
+
+Terraform state files must not be committed.
+
+The first single-operator baseline may use local state, but `.tfstate` and `.tfstate.backup` files must remain ignored. Remote state can be introduced later if collaboration, locking, or longer-lived environments become necessary.
 
 ## Status
 
