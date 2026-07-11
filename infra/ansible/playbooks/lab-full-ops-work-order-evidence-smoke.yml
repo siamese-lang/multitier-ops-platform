@@ -1,0 +1,205 @@
+---
+- name: Run lab-full-ops work-order evidence file smoke check
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    lab_full_ops_evidence_smoke_request_prefix: lab-full-ops-evidence-smoke
+    lab_full_ops_evidence_smoke_report_dir: /tmp/multitier-ops-platform
+    lab_full_ops_evidence_smoke_report_file: "{{ lab_full_ops_evidence_smoke_report_dir }}/lab-full-ops-work-order-evidence-smoke-{{ inventory_hostname }}.txt"
+    lab_full_ops_evidence_smoke_result_dir: "{{ lab_full_ops_evidence_smoke_report_dir }}/lab-full-ops-evidence-smoke"
+    lab_full_ops_evidence_smoke_base_url: https://127.0.0.1
+    lab_full_ops_evidence_smoke_nfs_export_root: /srv/ops-sample/files
+    lab_full_ops_evidence_smoke_db_host: db-primary-01
+    lab_full_ops_evidence_smoke_storage_host: nfs-01
+    lab_full_ops_evidence_smoke_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert DB and storage hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - lab_full_ops_evidence_smoke_db_host in groups['db']
+          - groups['storage'] is defined
+          - lab_full_ops_evidence_smoke_storage_host in groups['storage']
+        fail_msg: "db-primary-01 and nfs-01 must exist before running the evidence smoke check."
+
+    - name: Assert this smoke runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this smoke check from nginx-01 through the web inventory group."
+
+  tasks:
+    - name: Ensure local evidence smoke result directory exists
+      ansible.builtin.file:
+        path: "{{ lab_full_ops_evidence_smoke_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create work order, create evidence file, list metadata, and check API consistency through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ lab_full_ops_evidence_smoke_result_dir }}"
+        base_url="{{ lab_full_ops_evidence_smoke_base_url }}"
+        request_prefix="{{ lab_full_ops_evidence_smoke_request_prefix }}"
+
+        work_order_json="${result_dir}/work-order-create.json"
+        evidence_create_json="${result_dir}/evidence-create.json"
+        evidence_list_json="${result_dir}/evidence-list.json"
+        consistency_json="${result_dir}/evidence-consistency.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-create-work-order" \
+          -H 'Content-Type: application/json' \
+          -X POST "${base_url}/api/work-orders" \
+          -d '{"title":"lab-full-ops evidence file smoke","priority":"HIGH","assignee":"ops-admin","description":"Created by the lab-full-ops DB/file consistency smoke check."}' \
+          > "${work_order_json}"
+
+        work_order_id=$(python3 -c "import json; print(json.load(open('${work_order_json}'))['data']['id'])")
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-create-evidence" \
+          -X POST "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_create_json}"
+
+        evidence_id=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['id'])")
+        storage_path=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['storagePath'])")
+        expected_size=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['sizeBytes'])")
+        expected_sha256=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['sha256'])")
+        create_consistent=$(python3 -c "import json; print(str(json.load(open('${evidence_create_json}'))['consistency']['consistent']).lower())")
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-list-evidence" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${consistency_json}"
+
+        consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['checksumMatches']).lower())")
+        resolved_path=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['resolvedPath'])")
+
+        cat > "${parsed_kv}" <<EOF
+        work_order_id=${work_order_id}
+        evidence_id=${evidence_id}
+        storage_path=${storage_path}
+        expected_size_bytes=${expected_size}
+        expected_sha256=${expected_sha256}
+        create_consistent=${create_consistent}
+        consistency_status=${consistency_status}
+        consistent=${consistent}
+        file_exists=${file_exists}
+        size_matches=${size_matches}
+        checksum_matches=${checksum_matches}
+        resolved_path=${resolved_path}
+        work_order_json=${work_order_json}
+        evidence_create_json=${evidence_create_json}
+        evidence_list_json=${evidence_list_json}
+        consistency_json=${consistency_json}
+        EOF
+
+        cat "${parsed_kv}"
+
+        test "${create_consistent}" = "true"
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+      args:
+        executable: /bin/bash
+      register: evidence_smoke_api
+      changed_when: true
+
+    - name: Extract evidence smoke values
+      ansible.builtin.set_fact:
+        evidence_smoke_work_order_id: "{{ evidence_smoke_api.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_evidence_id: "{{ evidence_smoke_api.stdout | regex_search('evidence_id=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_storage_path: "{{ evidence_smoke_api.stdout | regex_search('storage_path=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_expected_size_bytes: "{{ evidence_smoke_api.stdout | regex_search('expected_size_bytes=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_expected_sha256: "{{ evidence_smoke_api.stdout | regex_search('expected_sha256=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_consistent: "{{ evidence_smoke_api.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        evidence_smoke_resolved_path: "{{ evidence_smoke_api.stdout | regex_search('resolved_path=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert storage path has expected controlled shape
+      ansible.builtin.assert:
+        that:
+          - evidence_smoke_storage_path is match('^work-order-[0-9]+/evidence-[0-9a-f-]+\.txt$')
+        fail_msg: "Unexpected storage path shape from API response: {{ evidence_smoke_storage_path }}"
+
+    - name: Verify PostgreSQL evidence metadata row directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ lab_full_ops_evidence_smoke_db_name }} -AtF $'\t' -c \
+          "select id, work_order_id, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ evidence_smoke_evidence_id | int }} and work_order_id = {{ evidence_smoke_work_order_id | int }};"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ lab_full_ops_evidence_smoke_db_host }}"
+      register: evidence_smoke_db_row
+      changed_when: false
+      failed_when: evidence_smoke_db_row.rc != 0 or evidence_smoke_db_row.stdout | length == 0
+
+    - name: Verify NFS file object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ lab_full_ops_evidence_smoke_nfs_export_root }}/{{ evidence_smoke_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ evidence_smoke_expected_size_bytes }}"
+        test "$sha" = "{{ evidence_smoke_expected_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ lab_full_ops_evidence_smoke_storage_host }}"
+      register: evidence_smoke_nfs_object
+      changed_when: false
+
+    - name: Read recent Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ lab_full_ops_evidence_smoke_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 20 || true"
+      register: evidence_smoke_nginx_log
+      changed_when: false
+
+    - name: Write work-order evidence smoke report
+      ansible.builtin.copy:
+        dest: "{{ lab_full_ops_evidence_smoke_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          smoke_request_prefix={{ lab_full_ops_evidence_smoke_request_prefix }}
+          base_url={{ lab_full_ops_evidence_smoke_base_url }}
+          work_order_id={{ evidence_smoke_work_order_id }}
+          evidence_id={{ evidence_smoke_evidence_id }}
+          storage_path={{ evidence_smoke_storage_path }}
+          expected_size_bytes={{ evidence_smoke_expected_size_bytes }}
+          expected_sha256={{ evidence_smoke_expected_sha256 }}
+          api_consistent={{ evidence_smoke_consistent }}
+          app_resolved_path={{ evidence_smoke_resolved_path }}
+          db_metadata_row={{ evidence_smoke_db_row.stdout | default('n/a') }}
+          nfs_object_check={{ evidence_smoke_nfs_object.stdout | default('n/a') }}
+          api_result_dir={{ lab_full_ops_evidence_smoke_result_dir }}
+          nginx_log_sample={{ evidence_smoke_nginx_log.stdout | default('n/a') }}
+
+    - name: Display work-order evidence smoke report
+      ansible.builtin.command: "cat {{ lab_full_ops_evidence_smoke_report_file }}"
+      register: evidence_smoke_report
+      changed_when: false
+
+    - name: Show work-order evidence smoke report
+      ansible.builtin.debug:
+        var: evidence_smoke_report.stdout_lines
