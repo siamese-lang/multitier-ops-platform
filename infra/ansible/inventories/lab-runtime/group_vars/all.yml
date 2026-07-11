@@ -1,0 +1,5 @@
+project_name: multitier-ops-platform
+environment_name: lab-runtime
+runtime_egress_report_dir: /tmp/multitier-ops-platform
+runtime_egress_report_file: /tmp/multitier-ops-platform/lab-runtime-egress.txt
+runtime_https_check_url: https://google.com
