@@ -1,0 +1,228 @@
+---
+- name: Deploy ops-sample-service as systemd workload
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    default_ops_app_jar_source_path: "{{ playbook_dir }}/../../../apps/ops-sample-service/target/ops-sample-service-{{ ops_app_version }}.jar"
+    effective_ops_app_jar_source_path: >-
+      {{ ops_app_jar_source_path if (ops_app_jar_source_path | default('') | length > 0) else default_ops_app_jar_source_path }}
+    ops_app_uses_remote_artifact: "{{ ops_app_jar_url | default('') | length > 0 }}"
+
+  pre_tasks:
+    - name: Assert DB password is supplied outside the repository
+      ansible.builtin.assert:
+        that:
+          - ops_db_password is defined
+          - ops_db_password | length >= 12
+        fail_msg: >-
+          ops_db_password must be supplied from ignored inventory, --extra-vars,
+          or future Ansible Vault. Do not commit a real DB password.
+      no_log: true
+
+    - name: Assert DB host and URL are configured
+      ansible.builtin.assert:
+        that:
+          - ops_db_host is defined
+          - ops_db_host | length > 0
+          - ops_db_url is defined
+          - ops_db_url | length > 0
+        fail_msg: ops_db_host and ops_db_url must be available before app deployment.
+
+    - name: Check local jar artifact when no remote artifact URL is supplied
+      ansible.builtin.stat:
+        path: "{{ effective_ops_app_jar_source_path }}"
+      delegate_to: localhost
+      become: false
+      register: local_ops_app_jar
+      when: not ops_app_uses_remote_artifact | bool
+
+    - name: Assert local jar artifact exists when no remote artifact URL is supplied
+      ansible.builtin.assert:
+        that:
+          - local_ops_app_jar.stat.exists
+        fail_msg: >-
+          Local jar artifact was not found at {{ effective_ops_app_jar_source_path }}.
+          Build the app first, or set ops_app_jar_url to a downloadable artifact.
+      when: not ops_app_uses_remote_artifact | bool
+
+  tasks:
+    - name: Install Java runtime and curl
+      ansible.builtin.apt:
+        name:
+          - "{{ ops_app_java_package }}"
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Ensure app group exists
+      ansible.builtin.group:
+        name: "{{ ops_app_group }}"
+        system: true
+        state: present
+
+    - name: Ensure app user exists
+      ansible.builtin.user:
+        name: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        home: "{{ ops_app_home }}"
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+        state: present
+
+    - name: Ensure app directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ ops_app_home }}", owner: "{{ ops_app_user }}", group: "{{ ops_app_group }}", mode: "0755" }
+        - { path: "{{ ops_app_config_dir }}", owner: root, group: root, mode: "0750" }
+        - { path: "{{ ops_app_log_dir }}", owner: "{{ ops_app_user }}", group: "{{ ops_app_group }}", mode: "0755" }
+
+    - name: Download app jar from remote artifact URL
+      ansible.builtin.get_url:
+        url: "{{ ops_app_jar_url }}"
+        dest: "{{ ops_app_jar_dest }}"
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+        force: true
+      when: ops_app_uses_remote_artifact | bool
+      notify: Restart ops-sample-service
+
+    - name: Copy app jar from local artifact
+      ansible.builtin.copy:
+        src: "{{ effective_ops_app_jar_source_path }}"
+        dest: "{{ ops_app_jar_dest }}"
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+      when: not ops_app_uses_remote_artifact | bool
+      notify: Restart ops-sample-service
+
+    - name: Write app environment file
+      ansible.builtin.copy:
+        dest: "{{ ops_app_config_dir }}/ops-sample-service.env"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          SERVER_PORT={{ ops_app_port }}
+          OPS_DB_URL={{ ops_db_url }}
+          OPS_DB_USERNAME={{ ops_db_user }}
+          OPS_DB_PASSWORD={{ ops_db_password }}
+          OPS_NODE_ROLE={{ ops_app_node_role }}
+          OPS_NODE_TIER={{ ops_app_node_tier }}
+          OPS_ENVIRONMENT={{ ops_app_environment }}
+          APP_VERSION={{ ops_app_version }}
+      no_log: true
+      notify: Restart ops-sample-service
+
+    - name: Install systemd unit
+      ansible.builtin.template:
+        src: ../templates/ops-sample-service.service.j2
+        dest: /etc/systemd/system/ops-sample-service.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart ops-sample-service
+
+    - name: Flush handlers before validation
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure ops-sample-service is enabled and started
+      ansible.builtin.systemd:
+        name: ops-sample-service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for app HTTP port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ ops_app_port }}"
+        timeout: 60
+
+    - name: Check app process health
+      ansible.builtin.command: "curl -fsS {{ ops_app_healthcheck_url }}"
+      register: ops_app_healthcheck
+      changed_when: false
+
+    - name: Check app node identity
+      ansible.builtin.command: "curl -fsS {{ ops_app_node_url }}"
+      register: ops_app_node_check
+      changed_when: false
+
+    - name: Check app DB-dependent readiness
+      ansible.builtin.command: "curl -fsS {{ ops_app_readycheck_url }}"
+      register: ops_app_readycheck
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and ops_app_readycheck.rc != 0
+
+    - name: Check DB-backed work order summary
+      ansible.builtin.command: "curl -fsS {{ ops_app_work_orders_summary_url }}"
+      register: ops_app_work_orders_summary_check
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and ops_app_work_orders_summary_check.rc != 0
+
+    - name: Check systemd service state
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: ops_app_service_state
+      changed_when: false
+
+    - name: Create app deployment report directory
+      ansible.builtin.file:
+        path: "{{ ops_app_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write app deployment validation report
+      ansible.builtin.copy:
+        dest: "{{ ops_app_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          node_role={{ node_role | default('was') }}
+          node_tier={{ node_tier | default('private-app') }}
+          service_name=ops-sample-service
+          service_state={{ ops_app_service_state.stdout | default('n/a') }}
+          app_port={{ ops_app_port }}
+          app_version={{ ops_app_version }}
+          db_host={{ ops_db_host }}
+          db_name={{ ops_db_name }}
+          db_user={{ ops_db_user }}
+          artifact_source={{ ops_app_jar_url if ops_app_uses_remote_artifact | bool else effective_ops_app_jar_source_path }}
+          healthcheck_rc={{ ops_app_healthcheck.rc | default('n/a') }}
+          readycheck_rc={{ ops_app_readycheck.rc | default('n/a') }}
+          work_orders_summary_rc={{ ops_app_work_orders_summary_check.rc | default('n/a') }}
+
+    - name: Display app deployment validation report
+      ansible.builtin.command: "cat {{ ops_app_report_file }}"
+      register: ops_app_report
+      changed_when: false
+
+    - name: Show app deployment validation report
+      ansible.builtin.debug:
+        var: ops_app_report.stdout_lines
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart ops-sample-service
+      ansible.builtin.systemd:
+        name: ops-sample-service
+        state: restarted
+        daemon_reload: true
