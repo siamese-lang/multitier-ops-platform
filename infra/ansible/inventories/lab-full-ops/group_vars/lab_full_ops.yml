@@ -5,8 +5,23 @@ environment_name: lab-full-ops
 lab_full_ops_report_dir: /tmp/multitier-ops-platform
 lab_full_ops_report_file: "{{ lab_full_ops_report_dir }}/lab-full-ops-baseline-{{ inventory_hostname }}.txt"
 
-lab_full_ops_expected_architecture: web-was-db-storage-ops-backup
+lab_full_ops_expected_architecture: web-was-db-storage-backup-reduced
 lab_full_ops_control_policy: operator-to-bastion-then-tier-nodes
+lab_full_ops_validation_profile: free-tier-reduced
+
+lab_full_ops_default_nodes:
+  - bastion-01
+  - nginx-01
+  - app-01
+  - db-primary-01
+  - nfs-01
+  - backup-01
+
+lab_full_ops_optional_nodes:
+  - app-02
+  - mon-01
+  - log-01
+  - loadgen-01
 
 lab_full_ops_expected_groups:
   - bastion
@@ -15,9 +30,6 @@ lab_full_ops_expected_groups:
   - db
   - storage
   - backup
-  - monitoring
-  - logging
-  - loadgen
-  - ops_nodes
   - private_nodes
+  - lab_full_ops_free_tier
   - lab_full_ops
