@@ -1,0 +1,4 @@
+---
+# Reuse the existing Nginx reverse proxy deployment logic with lab-full-ops group_vars.
+# Keep environment-specific values in inventories/lab-full-ops/group_vars/web.yml.
+- import_playbook: lab-full-min-nginx-reverse-proxy.yml
