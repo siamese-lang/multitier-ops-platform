@@ -6,9 +6,11 @@
 AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
 ```
 
-This environment extends the completed `lab-full-min` WEB/WAS/DB topology with storage, backup, observability, logging, and load generation nodes. It is still not a Terraform showcase. Terraform is used only to create and destroy a repeatable EC2 VM lab for later evidence-producing operations work.
+This environment extends the completed `lab-full-min` WEB/WAS/DB topology with storage, backup, observability, logging, and load generation tiers. It is still not a Terraform showcase. Terraform is used only to create and destroy a repeatable EC2 VM lab for later evidence-producing operations work.
 
-## Node layout
+## Target topology
+
+The full target topology remains:
 
 ```text
 [Public Subnet]
@@ -32,7 +34,44 @@ This environment extends the completed `lab-full-min` WEB/WAS/DB topology with s
 - loadgen-01
 ```
 
-Default instance types use `t2.micro` so the 10-node skeleton can stay under common 16 vCPU lab quotas. Increase instance sizes only for a specific validation run.
+## Default Free Tier validation mode
+
+The default apply is reduced for AWS Free Tier/vCPU-limited accounts:
+
+```text
+created by default:
+- bastion-01
+- nginx-01
+- app-01
+- db-primary-01
+- nfs-01
+- backup-01
+
+not created by default:
+- app-02
+- mon-01
+- log-01
+- loadgen-01
+- NAT Gateway
+```
+
+The defaults use `t3.micro` because the current account rejected `t2.micro` as not Free Tier eligible. The default EBS volume sizes are 8 GiB to keep short-lived validation runs small.
+
+This mode is still not guaranteed to be cost-free. Keep runtime validation short and destroy the environment immediately after collecting evidence.
+
+## Full target options
+
+Enable these only for an intentional full validation run:
+
+```hcl
+enable_app_02          = true
+enable_monitoring_node = true
+enable_logging_node    = true
+enable_loadgen_node    = true
+enable_nat_gateway     = true
+```
+
+`enable_nat_gateway = true` creates NAT Gateway and EIP resources. Do not enable it for simple Ansible control-path validation.
 
 ## Network intent
 
@@ -40,16 +79,16 @@ Default instance types use `t2.micro` so the 10-node skeleton can stay under com
 |---|---|
 | operator CIDR -> bastion-01:22 | controlled SSH entry point |
 | operator/web CIDR -> nginx-01:80/443 | WEB entry for validation |
-| bastion SG -> all lab nodes:22 | private node administration through bastion |
+| bastion SG -> created lab nodes:22 | private node administration through bastion |
 | nginx SG -> app SG:8080 | WEB to WAS upstream traffic |
 | app SG -> db SG:5432 | WAS to PostgreSQL traffic |
-| app SG -> storage SG:2049 | app file operations against `nfs-01` |
-| backup SG -> db SG:5432 | future `pg_dump` from `backup-01` |
-| backup SG -> storage SG:2049 | future file backup from `nfs-01` |
-| loadgen SG -> nginx SG:443 | private failure-window traffic generation |
-| monitoring SG -> lab node SGs:9100 | future node-level metric scrape path |
-| VPC CIDR -> log SG:3100 | future log shipping path |
-| private subnets -> NAT Gateway | package/runtime dependency retrieval |
+| app SG -> storage SG:2049 | app file operations against `nfs-01` when enabled |
+| backup SG -> db SG:5432 | future `pg_dump` from `backup-01` when enabled |
+| backup SG -> storage SG:2049 | future file backup from `nfs-01` when enabled |
+| loadgen SG -> nginx SG:443 | private failure-window traffic generation when enabled |
+| monitoring SG -> lab node SGs:9100 | future node-level metric scrape path when enabled |
+| VPC CIDR -> log SG:3100 | future log shipping path when enabled |
+| private subnets -> NAT Gateway | disabled by default; enabled only when `enable_nat_gateway=true` |
 
 The app, DB, storage, and ops nodes do not receive public IP addresses.
 
@@ -91,7 +130,14 @@ terraform validate
 terraform plan -out tfplan
 ```
 
-Runtime validation should be done once in a later validation issue. Do not repeatedly create and destroy this environment for small edits.
+For Ansible control-path validation, apply the default reduced profile only:
+
+```bash
+terraform apply tfplan
+terraform output
+```
+
+Then copy the created node IPs into the ignored Ansible inventory. Do not run `apply` again without first checking state.
 
 ## What this skeleton intentionally does not do
 
