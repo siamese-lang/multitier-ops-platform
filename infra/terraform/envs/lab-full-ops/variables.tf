@@ -114,57 +114,57 @@ variable "key_name" {
 }
 
 variable "bastion_instance_type" {
-  description = "EC2 instance type for bastion-01."
+  description = "EC2 instance type for bastion-01. The default keeps the full 10-node skeleton under common 16 vCPU lab quotas."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "nginx_instance_type" {
   description = "EC2 instance type for nginx-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "app_instance_type" {
   description = "EC2 instance type for app-01 and app-02."
   type        = string
-  default     = "t3.small"
+  default     = "t2.micro"
 }
 
 variable "db_instance_type" {
   description = "EC2 instance type for db-primary-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "storage_instance_type" {
   description = "EC2 instance type for nfs-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "backup_instance_type" {
   description = "EC2 instance type for backup-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "monitoring_instance_type" {
   description = "EC2 instance type for mon-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "logging_instance_type" {
   description = "EC2 instance type for log-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "loadgen_instance_type" {
   description = "EC2 instance type for loadgen-01."
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
 variable "web_port" {
