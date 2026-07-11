@@ -1,0 +1,4 @@
+---
+# Reuse the existing PostgreSQL primary deployment logic with lab-full-ops group_vars.
+# Keep environment-specific values in inventories/lab-full-ops/group_vars/db.yml.
+- import_playbook: lab-full-min-postgresql-primary.yml
