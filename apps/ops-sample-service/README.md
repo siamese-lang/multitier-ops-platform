@@ -1,6 +1,6 @@
 # ops-sample-service
 
-`ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab.
+`ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab and the later `lab-full-ops` storage validation path.
 
 This repository is an operations portfolio, not an application development portfolio. The service is intentionally small, but it is not an empty health-check app. It exists to create deterministic operating evidence for a VM-based multi-tier system.
 
@@ -14,7 +14,7 @@ The app must therefore remain a workload used by the operating environment. It m
 
 ## Role in the project
 
-OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added for Phase 1 because it gives the lab controllable WEB/WAS/DB behavior that can be used to verify incidents, logs, and recovery procedures.
+OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added because it gives the lab controllable behavior that can be used to verify incidents, logs, and recovery procedures.
 
 It provides deterministic evidence for:
 
@@ -25,8 +25,11 @@ It provides deterministic evidence for:
 - HTTP request logging
 - DB read/write traffic
 - DB-backed state changes
+- file storage path readiness in `lab-full-ops`
+- file write/read/delete roundtrip evidence in `lab-full-ops`
 - later `app-01` failure and `app-02` continuation drills
 - later PostgreSQL failure and recovery drills
+- later file storage failure and recovery drills
 
 ## Runtime role
 
@@ -37,12 +40,18 @@ app-01
 app-02
 ```
 
-Nginx routes traffic to both app nodes on port `8080`. PostgreSQL runs on `db-primary-01`.
+Nginx routes traffic to app nodes on port `8080`. PostgreSQL runs on `db-primary-01`. In `lab-full-ops`, app nodes can also mount the NFS export from `nfs-01` at `/mnt/ops-sample/files`.
 
-The evidence flow is:
+The WEB/WAS/DB evidence flow is:
 
 ```text
 HTTP request -> Nginx -> app-01/app-02 -> PostgreSQL
+```
+
+The file-storage evidence flow is:
+
+```text
+HTTP request -> Nginx -> app-01 -> NFS-mounted path -> nfs-01 export
 ```
 
 ## Data model
@@ -62,6 +71,8 @@ It inserts seed records when the table is empty. These records are deliberately 
 - PostgreSQL restart/recovery drill
 
 This gives the lab real data for read/write/state-change tests without turning the repository into a business application project.
+
+File probe endpoints do not create DB metadata. They are intentionally separate from work orders so file-path readiness can be diagnosed independently from PostgreSQL availability.
 
 ## Build
 
@@ -87,12 +98,14 @@ java -jar target/ops-sample-service-0.1.0.jar
 Expected behavior:
 
 ```text
-GET /healthz                 -> 200
-GET /node                    -> 200
-GET /readyz                  -> 503 when DB env is missing
-GET /db/time                 -> 503 when DB env is missing
-GET /api/work-orders         -> 503 when DB env is missing
-GET /api/work-orders/summary -> 503 when DB env is missing
+GET  /healthz                  -> 200
+GET  /node                     -> 200
+GET  /readyz                   -> 503 when DB env is missing
+GET  /db/time                  -> 503 when DB env is missing
+GET  /api/work-orders          -> 503 when DB env is missing
+GET  /api/work-orders/summary  -> 503 when DB env is missing
+GET  /file-probe/status        -> 200 or 503 depending on local/mounted file path
+POST /file-probe/roundtrip     -> 200 or 503 depending on local/mounted file path
 ```
 
 ## Run with DB
@@ -110,6 +123,22 @@ java -jar target/ops-sample-service-0.1.0.jar
 ```
 
 The first DB-backed request creates the `ops_work_orders` table if it does not exist and inserts sample data when the table is empty. This keeps app startup independent from DB availability while still giving the lab real data to operate.
+
+## Run with file probe path
+
+The file probe root defaults to:
+
+```text
+/mnt/ops-sample/files
+```
+
+Override it with:
+
+```bash
+export OPS_FILE_PROBE_ROOT=/mnt/ops-sample/files
+```
+
+In `lab-full-ops`, this path should match the app-side NFS mount path configured by Ansible. The service does not create or mount the path. It only reports and exercises the path that the operating environment provides.
 
 ## Endpoints
 
@@ -206,6 +235,54 @@ Returns count by status.
 curl -s http://localhost:8080/api/work-orders/summary
 ```
 
+### `GET /file-probe/status`
+
+Reports whether the configured file probe root exists and is a readable/writable directory. It does not require DB connectivity.
+
+```bash
+curl -i http://localhost:8080/file-probe/status
+```
+
+Expected success when the mounted path is ready:
+
+```text
+HTTP/1.1 200
+status=ready
+operation=file_probe.status
+directory.exists=true
+directory.directory=true
+directory.readable=true
+directory.writable=true
+```
+
+Expected failure when the path is missing, not mounted, or not writable:
+
+```text
+HTTP/1.1 503
+status=not-ready
+operation=file_probe.status
+```
+
+### `POST /file-probe/roundtrip`
+
+Writes a small generated probe file, reads it back, compares the content, and deletes it. It does not accept arbitrary file names or user-provided file content.
+
+```bash
+curl -i -X POST http://localhost:8080/file-probe/roundtrip
+```
+
+Expected success:
+
+```text
+HTTP/1.1 200
+status=ok
+operation=file_probe.roundtrip
+readMatchesWrite=true
+deleted=true
+```
+
+This endpoint is an operational probe for NFS-backed storage validation. It is not a general file upload/download API.
+
 ## Response evidence
 
 Every response includes node identity so the operator can prove which app node handled the request.
@@ -221,14 +298,14 @@ node.environment
 node.version
 ```
 
-DB-backed work-order responses also include:
+DB-backed work-order responses and file-probe responses also include:
 
 ```text
 operation
 durationMs
 ```
 
-These fields are intentionally simple. They are evidence aids for Nginx upstream, app failover, and DB latency observations.
+These fields are intentionally simple. They are evidence aids for Nginx upstream, app failover, DB latency, and file-storage-path observations.
 
 ## Request log evidence
 
@@ -273,6 +350,22 @@ Expected evidence:
 - seeded records are returned
 - the same records are visible regardless of which app node served the request
 
+### File storage path flow
+
+Run this after `nfs-01` export and app mount baselines are applied in a batched runtime validation window.
+
+```bash
+curl -i http://<nginx-public-ip>/file-probe/status
+curl -i -X POST http://<nginx-public-ip>/file-probe/roundtrip
+```
+
+Expected evidence:
+
+- app sees the configured mounted path
+- the path is readable and writable
+- write/read/delete roundtrip succeeds
+- response includes node identity for the app node that handled the request
+
 ### App node failure drill
 
 ```bash
@@ -312,6 +405,7 @@ Expected evidence:
 | `OPS_DB_URL` | For DB checks and work orders | PostgreSQL JDBC URL. |
 | `OPS_DB_USERNAME` | For DB checks and work orders | PostgreSQL username. |
 | `OPS_DB_PASSWORD` | For DB checks and work orders | PostgreSQL password. |
+| `OPS_FILE_PROBE_ROOT` | For file probe checks | File probe root. Defaults to `/mnt/ops-sample/files`. |
 | `OPS_NODE_ROLE` | No | Logical role. Defaults to `app`. |
 | `OPS_NODE_TIER` | No | Logical tier. Defaults to `private-was`. |
 | `OPS_ENVIRONMENT` | No | Environment name. Defaults to `lab-full-min`. |
@@ -325,7 +419,8 @@ This app does not include:
 - authentication
 - OpenKoda customization
 - complex business features
-- file storage
+- general file upload/download behavior
+- DB metadata for files
 - PostgreSQL replication
 - backup and restore automation
 - deployment automation
