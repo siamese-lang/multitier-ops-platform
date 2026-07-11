@@ -1,0 +1,17 @@
+---
+project_name: multitier-ops-platform
+environment_name: lab-full-min
+
+lab_full_min_report_dir: /tmp/multitier-ops-platform
+lab_full_min_report_file: "{{ lab_full_min_report_dir }}/lab-full-min-baseline-{{ inventory_hostname }}.txt"
+
+lab_full_min_expected_architecture: web-was-db
+lab_full_min_control_policy: operator-to-bastion-then-tier-nodes
+
+lab_full_min_expected_groups:
+  - bastion
+  - web
+  - app
+  - db
+  - private_nodes
+  - lab_full_min
