@@ -1,6 +1,5 @@
 # Terraform working directory
 .terraform/
-.terraform.lock.hcl
 
 # Local state and backups
 *.tfstate
