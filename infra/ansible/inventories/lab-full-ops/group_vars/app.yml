@@ -1,4 +1,9 @@
 ---
+# lab-full-ops app-tier defaults.
+# This file intentionally combines the NFS client mount path with the
+# ops-sample-service deployment variables so the evidence-file workload uses
+# the same path that Ansible mounts from nfs-01.
+
 lab_full_ops_app_nfs_client_packages:
   - nfs-common
 
@@ -17,3 +22,63 @@ lab_full_ops_app_nfs_mount_mode: "0755"
 
 lab_full_ops_app_nfs_write_probe_enabled: true
 lab_full_ops_app_nfs_write_probe_file: "{{ lab_full_ops_app_nfs_mount_path }}/.ansible-nfs-write-probe-{{ inventory_hostname }}"
+
+# ops-sample-service deployment defaults for lab-full-ops app nodes.
+# Do not put real secrets in this file. Supply ops_db_password from ignored
+# inventory, --extra-vars, or future Ansible Vault.
+
+ops_app_name: ops-sample-service
+ops_app_user: opsapp
+ops_app_group: opsapp
+ops_app_home: /opt/ops-sample-service
+ops_app_config_dir: /etc/ops-sample-service
+ops_app_log_dir: /var/log/ops-sample-service
+ops_app_jar_name: ops-sample-service.jar
+ops_app_jar_dest: "{{ ops_app_home }}/{{ ops_app_jar_name }}"
+
+ops_app_java_package: openjdk-17-jre-headless
+ops_app_port: 8080
+ops_app_version: "0.1.0"
+ops_app_environment: lab-full-ops
+ops_app_node_role: app
+ops_app_node_tier: private-was
+
+# Either provide a downloadable artifact URL or provide a local jar under
+# apps/ops-sample-service/target/. GitHub Actions artifacts can be downloaded
+# manually and placed there when Maven is not installed locally.
+ops_app_jar_url: ""
+ops_app_jar_source_path: ""
+
+# DB connection used by ops-sample-service.
+# db-primary-01 is defined in the lab-full-ops inventory.
+ops_db_host: "{{ hostvars['db-primary-01'].ansible_host | default('127.0.0.1') }}"
+ops_db_port: 5432
+ops_db_name: opsdb
+ops_db_user: ops_user
+ops_db_url: "jdbc:postgresql://{{ ops_db_host }}:{{ ops_db_port }}/{{ ops_db_name }}"
+
+# Supply this from ignored hosts.yml, --extra-vars, or future Ansible Vault.
+# Example:
+# ansible-playbook ... -e 'ops_db_password=<strong-local-password>'
+ops_db_password: ""
+
+# Evidence-file path used by the work-order evidence flow.
+# This must match the app-side NFS mount path prepared by
+# lab-full-ops-app-nfs-mount-baseline.yml.
+ops_evidence_file_root: "{{ lab_full_ops_app_nfs_mount_path }}"
+
+# Runtime checks. Set false only for a deliberate partial deployment test.
+ops_app_expect_db_ready: true
+ops_app_healthcheck_url: "http://127.0.0.1:{{ ops_app_port }}/healthz"
+ops_app_readycheck_url: "http://127.0.0.1:{{ ops_app_port }}/readyz"
+ops_app_node_url: "http://127.0.0.1:{{ ops_app_port }}/node"
+ops_app_work_orders_summary_url: "http://127.0.0.1:{{ ops_app_port }}/api/work-orders/summary"
+
+# Evidence-flow checks are intentionally disabled by default because they need
+# the NFS server baseline, app mount baseline, DB setup, and updated app jar to
+# be present in the same batched runtime validation window.
+ops_app_validate_evidence_flow: false
+ops_app_evidence_root_check_enabled: true
+
+ops_app_report_dir: /tmp/multitier-ops-platform
+ops_app_report_file: "{{ ops_app_report_dir }}/lab-full-ops-ops-sample-service-{{ inventory_hostname }}.txt"
