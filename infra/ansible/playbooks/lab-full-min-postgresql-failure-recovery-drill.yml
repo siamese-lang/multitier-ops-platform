@@ -1,0 +1,337 @@
+---
+- name: Run lab-full-min PostgreSQL failure and recovery drill
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    postgresql_failure_target: db-primary-01
+    postgresql_service_name: postgresql
+    app_service_name: ops-sample-service
+
+    postgresql_failure_request_count: 5
+    postgresql_failure_request_prefix: lab-full-min-postgresql-failure
+
+    postgresql_failure_health_url: https://127.0.0.1/healthz
+    postgresql_failure_ready_url: https://127.0.0.1/readyz
+    postgresql_failure_summary_url: https://127.0.0.1/api/work-orders/summary
+
+    postgresql_failure_result_file: /tmp/multitier-ops-platform/lab-full-min-postgresql-failure-results.tsv
+    postgresql_failure_access_log: /var/log/nginx/ops_access.log
+    postgresql_failure_error_log: /var/log/nginx/ops_error.log
+    postgresql_failure_report_dir: /tmp/multitier-ops-platform
+    postgresql_failure_report_file: "{{ postgresql_failure_report_dir }}/lab-full-min-postgresql-failure-recovery-drill-{{ inventory_hostname }}.txt"
+
+  pre_tasks:
+    - name: Assert DB inventory host exists
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - postgresql_failure_target in groups['db']
+        fail_msg: db-primary-01 must exist in the db inventory group before running this drill.
+
+    - name: Assert app inventory group exists
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['app'] | length >= 2
+        fail_msg: app group must contain at least two app nodes before running this drill.
+
+  tasks:
+    - name: Check Nginx service before drill
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_pre_state
+      changed_when: false
+
+    - name: Check app service state before drill
+      ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['app'] }}"
+      register: app_pre_states
+      changed_when: false
+
+    - name: Check PostgreSQL service before drill
+      ansible.builtin.command: "systemctl is-active {{ postgresql_service_name }}"
+      delegate_to: "{{ postgresql_failure_target }}"
+      register: postgresql_pre_state
+      changed_when: false
+
+    - name: Check baseline process health through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ postgresql_failure_health_url }}"
+      register: baseline_health_check
+      changed_when: false
+
+    - name: Check baseline DB-dependent readiness through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ postgresql_failure_ready_url }}"
+      register: baseline_ready_check
+      changed_when: false
+
+    - name: Check baseline DB-backed summary through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ postgresql_failure_summary_url }}"
+      register: baseline_summary_check
+      changed_when: false
+
+    - name: Capture PostgreSQL activity before failure
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d opsdb -Atc "select 'opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb';"
+        sudo -u postgres psql -d opsdb -Atc "select 'active_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'active';"
+        sudo -u postgres psql -d opsdb -Atc "show max_connections;" | sed 's/^/max_conn_setting=/'
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ postgresql_failure_target }}"
+      register: pg_activity_before
+      changed_when: false
+
+    - name: Run PostgreSQL failure and recovery block
+      block:
+        - name: Stop PostgreSQL on DB primary
+          ansible.builtin.service:
+            name: "{{ postgresql_service_name }}"
+            state: stopped
+          delegate_to: "{{ postgresql_failure_target }}"
+
+        - name: Confirm PostgreSQL service is inactive
+          ansible.builtin.shell: "systemctl is-active {{ postgresql_service_name }} || true"
+          delegate_to: "{{ postgresql_failure_target }}"
+          register: postgresql_stopped_state
+          changed_when: false
+          failed_when: postgresql_stopped_state.stdout == 'active'
+
+        - name: Confirm app services remain active while DB is down
+          ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['app'] }}"
+          register: app_during_db_failure_states
+          changed_when: false
+          failed_when: app_during_db_failure_states.rc != 0
+
+        - name: Allow application connection pool to observe DB failure
+          ansible.builtin.pause:
+            seconds: 3
+
+        - name: Send process-level and DB-dependent requests while PostgreSQL is stopped
+          ansible.builtin.shell: |
+            set -euo pipefail
+            result_file="{{ postgresql_failure_result_file }}"
+            : > "$result_file"
+
+            run_probe() {
+              local request_id="$1"
+              local endpoint="$2"
+              local url="$3"
+              local tmp_body
+              tmp_body="$(mktemp)"
+              local http_code
+              local time_total
+              local size_download
+              local curl_rc
+
+              set +e
+              read -r http_code time_total size_download < <(
+                curl -k -sS -o "$tmp_body" \
+                  -w "%{http_code} %{time_total} %{size_download}" \
+                  -H "X-Request-Id: ${request_id}" \
+                  "$url"
+              )
+              curl_rc=$?
+              set -e
+
+              if [ "$curl_rc" -eq 0 ]; then
+                printf '%s\t%s\t%s\t%s\t%s\tok\n' "$request_id" "$endpoint" "$http_code" "$time_total" "$size_download" >> "$result_file"
+              else
+                printf '%s\t%s\t%s\t%s\t%s\tcurl_rc_%s\n' "$request_id" "$endpoint" "${http_code:-000}" "${time_total:-0}" "${size_download:-0}" "$curl_rc" >> "$result_file"
+              fi
+
+              rm -f "$tmp_body"
+            }
+
+            for i in $(seq 1 {{ postgresql_failure_request_count }}); do
+              run_probe "{{ postgresql_failure_request_prefix }}-${i}-healthz" "healthz" "{{ postgresql_failure_health_url }}"
+              run_probe "{{ postgresql_failure_request_prefix }}-${i}-readyz" "readyz" "{{ postgresql_failure_ready_url }}"
+              run_probe "{{ postgresql_failure_request_prefix }}-${i}-summary" "summary" "{{ postgresql_failure_summary_url }}"
+              sleep 1
+            done
+
+            total_count=$(wc -l < "$result_file" | tr -d ' ')
+            health_2xx=$(awk -F '\t' '$2=="healthz" && $3 ~ /^2/ {c++} END {print c+0}' "$result_file")
+            ready_non_2xx=$(awk -F '\t' '$2=="readyz" && $3 !~ /^2/ {c++} END {print c+0}' "$result_file")
+            summary_non_2xx=$(awk -F '\t' '$2=="summary" && $3 !~ /^2/ {c++} END {print c+0}' "$result_file")
+            ready_2xx=$(awk -F '\t' '$2=="readyz" && $3 ~ /^2/ {c++} END {print c+0}' "$result_file")
+            summary_2xx=$(awk -F '\t' '$2=="summary" && $3 ~ /^2/ {c++} END {print c+0}' "$result_file")
+            max_time=$(awk -F '\t' 'BEGIN {max=0} {if ($4+0 > max) max=$4+0} END {printf "%.6f", max}' "$result_file")
+
+            cat <<SUMMARY
+            total_count=${total_count}
+            health_2xx=${health_2xx}
+            ready_2xx=${ready_2xx}
+            ready_non_2xx=${ready_non_2xx}
+            summary_2xx=${summary_2xx}
+            summary_non_2xx=${summary_non_2xx}
+            max_time_sec=${max_time}
+            SUMMARY
+          args:
+            executable: /bin/bash
+          register: failure_window_requests
+          changed_when: false
+          failed_when: false
+
+        - name: Read PostgreSQL failure probe result file
+          ansible.builtin.command: "cat {{ postgresql_failure_result_file }}"
+          register: failure_result_file_content
+          changed_when: false
+
+        - name: Capture app journal samples during DB failure window
+          ansible.builtin.shell: "journalctl -u {{ app_service_name }} -n 200 --no-pager | grep {{ postgresql_failure_request_prefix }} || true"
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['app'] }}"
+          register: app_journal_during_failure
+          changed_when: false
+
+        - name: Capture Nginx access log during DB failure window
+          ansible.builtin.shell: "tail -n 120 {{ postgresql_failure_access_log }} 2>/dev/null || true"
+          register: access_log_during_failure
+          changed_when: false
+
+        - name: Capture Nginx error log during DB failure window
+          ansible.builtin.shell: "tail -n 120 {{ postgresql_failure_error_log }} 2>/dev/null || true"
+          register: error_log_during_failure
+          changed_when: false
+
+      always:
+        - name: Restart PostgreSQL after failure drill
+          ansible.builtin.service:
+            name: "{{ postgresql_service_name }}"
+            state: started
+          delegate_to: "{{ postgresql_failure_target }}"
+
+        - name: Wait for PostgreSQL port after restart
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[postgresql_failure_target].ansible_host }}"
+            port: "{{ hostvars[postgresql_failure_target].expected_db_port | default(5432) }}"
+            timeout: 60
+          delegate_to: "{{ postgresql_failure_target }}"
+
+        - name: Confirm PostgreSQL service is active after recovery
+          ansible.builtin.command: "systemctl is-active {{ postgresql_service_name }}"
+          delegate_to: "{{ postgresql_failure_target }}"
+          register: postgresql_recovered_state
+          changed_when: false
+
+    - name: Wait for DB-dependent readiness to recover through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ postgresql_failure_ready_url }}"
+      register: post_recovery_ready_check
+      changed_when: false
+      retries: 20
+      delay: 3
+      until: post_recovery_ready_check.rc == 0
+
+    - name: Check DB-backed summary after PostgreSQL recovery
+      ansible.builtin.command: "curl -k -fsS {{ postgresql_failure_summary_url }}"
+      register: post_recovery_summary_check
+      changed_when: false
+
+    - name: Confirm app services are active after PostgreSQL recovery
+      ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['app'] }}"
+      register: app_after_recovery_states
+      changed_when: false
+
+    - name: Capture PostgreSQL activity after recovery
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d opsdb -Atc "select 'opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb';"
+        sudo -u postgres psql -d opsdb -Atc "select 'active_opsdb_connections=' || count(*) from pg_stat_activity where datname = 'opsdb' and state = 'active';"
+        sudo -u postgres psql -d opsdb -Atc "show max_connections;" | sed 's/^/max_conn_setting=/'
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ postgresql_failure_target }}"
+      register: pg_activity_after_recovery
+      changed_when: false
+
+    - name: Capture PostgreSQL log sample after recovery
+      ansible.builtin.shell: |
+        set -o pipefail
+        latest_log="$(ls -1 /var/log/postgresql/postgresql-*.log 2>/dev/null | tail -n 1 || true)"
+        if [ -n "$latest_log" ]; then
+          tail -n 120 "$latest_log"
+        else
+          journalctl -u {{ postgresql_service_name }} -n 120 --no-pager || true
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ postgresql_failure_target }}"
+      register: postgresql_log_sample
+      changed_when: false
+      failed_when: false
+
+    - name: Create PostgreSQL failure drill report directory
+      ansible.builtin.file:
+        path: "{{ postgresql_failure_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write PostgreSQL failure and recovery validation report
+      ansible.builtin.copy:
+        dest: "{{ postgresql_failure_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          drill=postgresql_failure_recovery
+          postgresql_failure_target={{ postgresql_failure_target }}
+          postgresql_service_name={{ postgresql_service_name }}
+          app_service_name={{ app_service_name }}
+          nginx_pre_state={{ nginx_pre_state.stdout | default('n/a') }}
+          postgresql_pre_state={{ postgresql_pre_state.stdout | default('n/a') }}
+          postgresql_stopped_state={{ postgresql_stopped_state.stdout | default('n/a') }}
+          postgresql_recovered_state={{ postgresql_recovered_state.stdout | default('n/a') }}
+          baseline_health_rc={{ baseline_health_check.rc | default('n/a') }}
+          baseline_ready_rc={{ baseline_ready_check.rc | default('n/a') }}
+          baseline_summary_rc={{ baseline_summary_check.rc | default('n/a') }}
+          failure_window_requests_rc={{ failure_window_requests.rc | default('n/a') }}
+          post_recovery_ready_rc={{ post_recovery_ready_check.rc | default('n/a') }}
+          post_recovery_summary_rc={{ post_recovery_summary_check.rc | default('n/a') }}
+          request_count_per_endpoint={{ postgresql_failure_request_count }}
+          request_prefix={{ postgresql_failure_request_prefix }}
+          result_file={{ postgresql_failure_result_file }}
+          access_log={{ postgresql_failure_access_log }}
+          error_log={{ postgresql_failure_error_log }}
+          --- failure_window_summary ---
+          {{ failure_window_requests.stdout | default('n/a') }}
+          --- pg_activity_before ---
+          {{ pg_activity_before.stdout | default('n/a') }}
+          --- pg_activity_after_recovery ---
+          {{ pg_activity_after_recovery.stdout | default('n/a') }}
+
+    - name: Display PostgreSQL failure and recovery validation report
+      ansible.builtin.command: "cat {{ postgresql_failure_report_file }}"
+      register: postgresql_failure_report
+      changed_when: false
+
+    - name: Show PostgreSQL failure and recovery report
+      ansible.builtin.debug:
+        var: postgresql_failure_report.stdout_lines
+
+    - name: Show failure probe result file
+      ansible.builtin.debug:
+        var: failure_result_file_content.stdout_lines
+
+    - name: Show app journal samples during DB failure
+      ansible.builtin.debug:
+        var: app_journal_during_failure.results
+
+    - name: Show Nginx access log during DB failure
+      ansible.builtin.debug:
+        var: access_log_during_failure.stdout_lines
+
+    - name: Show Nginx error log during DB failure
+      ansible.builtin.debug:
+        var: error_log_during_failure.stdout_lines
+
+    - name: Show PostgreSQL log sample
+      ansible.builtin.debug:
+        var: postgresql_log_sample.stdout_lines
