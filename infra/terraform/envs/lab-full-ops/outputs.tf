@@ -3,6 +3,11 @@ output "vpc_id" {
   value       = aws_vpc.this.id
 }
 
+output "validation_profile" {
+  description = "Enabled lab-full-ops validation components."
+  value       = local.validation_profile
+}
+
 output "subnet_ids" {
   description = "Subnet IDs by tier."
   value = {
@@ -15,7 +20,7 @@ output "subnet_ids" {
 }
 
 output "security_group_ids" {
-  description = "Security group IDs by tier."
+  description = "Security group IDs by tier. Some groups may have no attached node in reduced validation mode."
   value = {
     bastion    = aws_security_group.bastion.id
     nginx      = aws_security_group.nginx.id
@@ -30,13 +35,13 @@ output "security_group_ids" {
 }
 
 output "nat_gateway_id" {
-  description = "NAT Gateway ID used for private subnet egress."
-  value       = aws_nat_gateway.this.id
+  description = "NAT Gateway ID when enable_nat_gateway=true. Null in default Free Tier validation mode."
+  value       = try(aws_nat_gateway.this[0].id, null)
 }
 
 output "nat_eip_public_ip" {
-  description = "Elastic IP address associated with the NAT Gateway."
-  value       = aws_eip.nat.public_ip
+  description = "Elastic IP address associated with the NAT Gateway when enable_nat_gateway=true. Null in default Free Tier validation mode."
+  value       = try(aws_eip.nat[0].public_ip, null)
 }
 
 output "ubuntu_ami_id" {
@@ -59,34 +64,34 @@ output "public_node_ips" {
 }
 
 output "private_node_ips" {
-  description = "Private IPs for lab-full-ops private nodes."
+  description = "Private IPs for created lab-full-ops private nodes. Optional maps are empty when their nodes are disabled."
   value = {
     app     = { for name, instance in aws_instance.app : name => instance.private_ip }
     db      = { "db-primary-01" = aws_instance.db_primary.private_ip }
-    storage = { "nfs-01" = aws_instance.nfs.private_ip }
-    backup  = { "backup-01" = aws_instance.backup.private_ip }
-    metrics = { "mon-01" = aws_instance.monitoring.private_ip }
-    logs    = { "log-01" = aws_instance.logging.private_ip }
-    loadgen = { "loadgen-01" = aws_instance.loadgen.private_ip }
+    storage = var.enable_storage_node ? { "nfs-01" = aws_instance.nfs[0].private_ip } : {}
+    backup  = var.enable_backup_node ? { "backup-01" = aws_instance.backup[0].private_ip } : {}
+    metrics = var.enable_monitoring_node ? { "mon-01" = aws_instance.monitoring[0].private_ip } : {}
+    logs    = var.enable_logging_node ? { "log-01" = aws_instance.logging[0].private_ip } : {}
+    loadgen = var.enable_loadgen_node ? { "loadgen-01" = aws_instance.loadgen[0].private_ip } : {}
   }
 }
 
 output "tier_flow_summary" {
-  description = "Expected network flow for lab-full-ops."
+  description = "Expected network flow for lab-full-ops. Some flows are future-only when optional nodes are disabled."
   value = {
     operator_to_bastion = "${var.operator_cidr} -> bastion-01:22"
     web_to_nginx_http   = "${var.web_ingress_cidr} -> nginx-01:${var.web_port}"
     web_to_nginx_https  = "${var.web_ingress_cidr} -> nginx-01:${var.web_https_port}"
-    bastion_to_nodes    = "bastion SG -> all lab nodes:22"
+    bastion_to_nodes    = "bastion SG -> created lab nodes:22"
     nginx_to_app        = "nginx SG -> app SG:${var.app_port}"
     app_to_db           = "app SG -> db SG:${var.db_port}"
-    app_to_storage      = "app SG -> storage SG:${var.nfs_port}"
-    backup_to_db        = "backup SG -> db SG:${var.db_port}"
-    backup_to_storage   = "backup SG -> storage SG:${var.nfs_port}"
-    loadgen_to_nginx    = "loadgen SG -> nginx SG:${var.web_https_port}"
-    monitoring_scrape   = "monitoring SG -> lab node SGs:${var.node_exporter_port}"
-    log_shipping        = "VPC CIDR -> log SG:${var.loki_push_port}"
-    private_egress      = "private app/db/storage/ops subnets -> NAT Gateway"
+    app_to_storage      = "app SG -> storage SG:${var.nfs_port} when nfs-01 is enabled"
+    backup_to_db        = "backup SG -> db SG:${var.db_port} when backup-01 is enabled"
+    backup_to_storage   = "backup SG -> storage SG:${var.nfs_port} when backup-01 and nfs-01 are enabled"
+    loadgen_to_nginx    = "loadgen SG -> nginx SG:${var.web_https_port} when loadgen-01 is enabled"
+    monitoring_scrape   = "monitoring SG -> lab node SGs:${var.node_exporter_port} when mon-01 is enabled"
+    log_shipping        = "VPC CIDR -> log SG:${var.loki_push_port} when log-01 is enabled"
+    private_egress      = var.enable_nat_gateway ? "private subnets -> NAT Gateway" : "disabled by default for Free Tier validation"
   }
 }
 
@@ -96,19 +101,29 @@ output "ssh_to_bastion" {
 }
 
 output "ssh_proxycommand_templates" {
-  description = "ProxyCommand SSH templates through bastion-01. Replace <path-to-private-key> before use."
+  description = "ProxyCommand SSH templates through bastion-01 for created nodes. Replace <path-to-private-key> before use."
   value = merge(
     {
       "nginx-01"      = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nginx.private_ip}"
       "db-primary-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.db_primary.private_ip}"
-      "nfs-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nfs.private_ip}"
-      "backup-01"     = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.backup.private_ip}"
-      "mon-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.monitoring.private_ip}"
-      "log-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.logging.private_ip}"
-      "loadgen-01"    = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.loadgen.private_ip}"
     },
     {
       for name, instance in aws_instance.app : name => "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${instance.private_ip}"
-    }
+    },
+    var.enable_storage_node ? {
+      "nfs-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nfs[0].private_ip}"
+    } : {},
+    var.enable_backup_node ? {
+      "backup-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.backup[0].private_ip}"
+    } : {},
+    var.enable_monitoring_node ? {
+      "mon-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.monitoring[0].private_ip}"
+    } : {},
+    var.enable_logging_node ? {
+      "log-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.logging[0].private_ip}"
+    } : {},
+    var.enable_loadgen_node ? {
+      "loadgen-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.loadgen[0].private_ip}"
+    } : {}
   )
 }
