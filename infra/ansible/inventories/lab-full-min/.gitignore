@@ -1,0 +1,5 @@
+# Local inventory with real IPs and local key paths
+hosts.yml
+
+# Runtime artifacts
+*.retry
