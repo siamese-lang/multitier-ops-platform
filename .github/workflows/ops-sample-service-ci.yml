@@ -1,0 +1,39 @@
+name: ops-sample-service-ci
+
+on:
+  pull_request:
+    paths:
+      - "apps/ops-sample-service/**"
+      - ".github/workflows/ops-sample-service-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/ops-sample-service/**"
+      - ".github/workflows/ops-sample-service-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ops sample service
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/ops-sample-service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B clean package
