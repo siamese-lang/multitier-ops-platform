@@ -1,0 +1,90 @@
+---
+- name: Recover OpenKoda runtime on private app node
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/openkoda.yml
+
+  tasks:
+    - name: Show OpenKoda recovery target identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host | default('n/a') }}"
+          hostname: "{{ ansible_facts.get('hostname', 'n/a') }}"
+          default_ipv4: "{{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}"
+          distribution: "{{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}"
+          app_private_node: "{{ app_private_node | default('not_set') }}"
+          app_has_public_ip: "{{ app_has_public_ip | default('not_set') }}"
+          app_private_egress_mode: "{{ app_private_egress_mode | default('not_set') }}"
+
+    - name: Ensure Docker service is running before recovery
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Recover OpenKoda with Docker Compose
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} up -d
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      register: openkoda_recover_compose_up
+      changed_when: >-
+        'Started' in openkoda_recover_compose_up.stdout or
+        'Created' in openkoda_recover_compose_up.stdout or
+        'Recreated' in openkoda_recover_compose_up.stdout or
+        'Running' in openkoda_recover_compose_up.stdout
+
+    - name: Wait for OpenKoda local health after recovery
+      ansible.builtin.command: curl -I {{ openkoda_healthcheck_url }} --max-time 10
+      register: openkoda_recovery_healthcheck
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: openkoda_recovery_healthcheck.rc == 0
+
+    - name: Read Docker Compose status after recovery
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} ps
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      register: openkoda_recovery_compose_ps
+      changed_when: false
+
+    - name: Ensure OpenKoda recovery report directory exists
+      ansible.builtin.file:
+        path: "{{ openkoda_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write OpenKoda recovery report
+      ansible.builtin.copy:
+        dest: "{{ openkoda_report_dir }}/openkoda-recovery.txt"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          check_type=openkoda-recovery
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts.get('hostname', 'n/a') }}
+          default_ipv4={{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}
+          distribution={{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}
+          app_private_node={{ app_private_node | default('not_set') }}
+          app_has_public_ip={{ app_has_public_ip | default('not_set') }}
+          app_private_egress_mode={{ app_private_egress_mode | default('not_set') }}
+          openkoda_compose_file={{ openkoda_compose_file }}
+          openkoda_recover_compose_up_rc={{ openkoda_recover_compose_up.rc }}
+          openkoda_healthcheck_url={{ openkoda_healthcheck_url }}
+          openkoda_recovery_healthcheck_rc={{ openkoda_recovery_healthcheck.rc }}
+          openkoda_recovery_healthcheck_first_line={{ (openkoda_recovery_healthcheck.stdout_lines | default(['n/a']))[0] }}
+
+    - name: Display OpenKoda recovery report
+      ansible.builtin.command: cat {{ openkoda_report_dir }}/openkoda-recovery.txt
+      register: openkoda_recovery_report
+      changed_when: false
+
+    - name: Print OpenKoda recovery report
+      ansible.builtin.debug:
+        var: openkoda_recovery_report.stdout_lines
