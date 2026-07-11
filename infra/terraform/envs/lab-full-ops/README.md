@@ -32,6 +32,8 @@ This environment extends the completed `lab-full-min` WEB/WAS/DB topology with s
 - loadgen-01
 ```
 
+Default instance types use `t2.micro` so the 10-node skeleton can stay under common 16 vCPU lab quotas. Increase instance sizes only for a specific validation run.
+
 ## Network intent
 
 | Flow | Purpose |
