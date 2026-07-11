@@ -1,0 +1,4 @@
+app_private_node: true
+app_has_public_ip: false
+app_has_nat_egress: false
+app_expected_private_cidr_prefix: "10.20.11."
