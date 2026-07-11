@@ -17,6 +17,7 @@
           node_tier: "{{ node_tier | default('undefined') }}"
           ssh_path: "{{ ssh_path | default('undefined') }}"
           expected_public_entrypoint: "{{ expected_public_entrypoint | default('undefined') }}"
+          validation_profile: "{{ lab_full_ops_validation_profile | default('undefined') }}"
           group_names: "{{ group_names }}"
 
     - name: Ensure lab-full-ops baseline report directory exists
@@ -33,6 +34,7 @@
           project={{ project_name }}
           environment={{ environment_name }}
           architecture={{ lab_full_ops_expected_architecture }}
+          validation_profile={{ lab_full_ops_validation_profile }}
           control_policy={{ lab_full_ops_control_policy }}
           inventory_hostname={{ inventory_hostname }}
           ansible_host={{ ansible_host | default('n/a') }}
