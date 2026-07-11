@@ -1,0 +1,37 @@
+# Copy this file to terraform.tfvars and replace placeholder values.
+# Do not commit terraform.tfvars.
+
+aws_region = "ap-northeast-2"
+
+# Restrict SSH and WEB access to the operator public IP during lab validation.
+# Example: "203.0.113.10/32"
+operator_cidr    = "<your-public-ip>/32"
+web_ingress_cidr = "<your-public-ip>/32"
+
+# Existing EC2 key pair name in the selected AWS region.
+# Terraform references this key pair but never stores private key material.
+key_name = "<existing-ec2-key-pair-name>"
+
+# Optional CIDR overrides.
+# vpc_cidr                     = "10.50.0.0/16"
+# public_subnet_cidr           = "10.50.1.0/24"
+# private_app_subnet_cidr      = "10.50.11.0/24"
+# private_db_subnet_cidr       = "10.50.21.0/24"
+# private_storage_subnet_cidr  = "10.50.31.0/24"
+# private_ops_subnet_cidr      = "10.50.41.0/24"
+
+# Optional instance and volume overrides.
+# Defaults use t2.micro to keep the 10-node skeleton under common 16 vCPU lab quotas.
+# bastion_instance_type        = "t2.micro"
+# nginx_instance_type          = "t2.micro"
+# app_instance_type            = "t2.micro"
+# db_instance_type             = "t2.micro"
+# storage_instance_type        = "t2.micro"
+# backup_instance_type         = "t2.micro"
+# monitoring_instance_type     = "t2.micro"
+# logging_instance_type        = "t2.micro"
+# loadgen_instance_type        = "t2.micro"
+# root_volume_size_gib         = 20
+# storage_root_volume_size_gib = 30
+# backup_root_volume_size_gib  = 30
+# availability_zone            = "ap-northeast-2a"
