@@ -2,9 +2,11 @@
 
 This inventory targets the Terraform `lab-full-ops` environment.
 
-`lab-full-ops` is the Phase 2 VM-based operating environment for storage, backup, observability, logging, and load generation expansion. This inventory does not configure those services. It only verifies that Ansible can control every node through the intended bastion path before service installation starts.
+`lab-full-ops` is the Phase 2 VM-based operating environment for storage, backup, observability, logging, and load generation expansion. This inventory does not configure those services. It only verifies that Ansible can control the created nodes through the intended bastion path before service installation starts.
 
-## Target nodes
+## Target topology
+
+The full target topology remains:
 
 ```text
 [Public Subnet]
@@ -28,6 +30,32 @@ This inventory targets the Terraform `lab-full-ops` environment.
 - loadgen-01
 ```
 
+## Default validation profile
+
+The default Terraform profile is reduced for AWS Free Tier and vCPU-limited accounts. The default Ansible validation group is therefore also reduced:
+
+```text
+lab_full_ops / lab_full_ops_free_tier:
+- bastion-01
+- nginx-01
+- app-01
+- db-primary-01
+- nfs-01
+- backup-01
+```
+
+Optional nodes are kept in `lab_full_ops_optional` and should be used only when the matching Terraform toggles were enabled:
+
+```text
+lab_full_ops_optional:
+- app-02
+- mon-01
+- log-01
+- loadgen-01
+```
+
+Do not run control-path validation against optional nodes unless Terraform actually created them.
+
 ## Control node
 
 Run Ansible from WSL Ubuntu, Linux, or macOS.
@@ -49,7 +77,7 @@ WSL / Ansible:
 - Do not copy private SSH keys to `bastion-01`.
 - Keep the private key only on the Ansible control node.
 - Operators SSH only to `bastion-01` directly.
-- All other nodes are controlled through the bastion `ProxyCommand` path.
+- All other created nodes are controlled through the bastion `ProxyCommand` path.
 - Keep real IP addresses and local key paths in ignored `hosts.yml`.
 - Commit only `hosts.yml.example`.
 - Do not commit `terraform.tfvars`, `tfplan`, `.tfstate`, private keys, credentials, or session tokens.
@@ -64,25 +92,32 @@ terraform init
 terraform validate
 terraform plan -out tfplan
 terraform apply tfplan
+terraform output
 ```
 
-Record these outputs:
+For the default reduced profile, record these outputs:
 
 ```bash
 terraform output public_node_ips
 terraform output private_node_ips
+terraform output validation_profile
 ```
 
-You need these values for `hosts.yml`:
+You need these values for the default `hosts.yml` validation:
 
 ```text
 bastion_public_ip
 nginx_private_ip
 app_01_private_ip
-app_02_private_ip
 db_primary_private_ip
 nfs_01_private_ip
 backup_01_private_ip
+```
+
+These values are optional and should be filled only if the matching Terraform toggles were enabled:
+
+```text
+app_02_private_ip
 mon_01_private_ip
 log_01_private_ip
 loadgen_01_private_ip
@@ -105,14 +140,12 @@ Edit `inventories/lab-full-ops/hosts.yml`:
 <bastion_public_ip>                 -> Terraform output value
 <nginx_private_ip>                  -> Terraform output value
 <app_01_private_ip>                 -> Terraform output value
-<app_02_private_ip>                 -> Terraform output value
 <db_primary_private_ip>             -> Terraform output value
 <nfs_01_private_ip>                 -> Terraform output value
 <backup_01_private_ip>              -> Terraform output value
-<mon_01_private_ip>                 -> Terraform output value
-<log_01_private_ip>                 -> Terraform output value
-<loadgen_01_private_ip>             -> Terraform output value
 ```
+
+Leave optional placeholders unchanged unless the optional Terraform nodes were created.
 
 Example WSL private-key preparation:
 
@@ -134,26 +167,32 @@ ansible -i inventories/lab-full-ops/hosts.yml lab_full_ops -m ping
 ansible-playbook -i inventories/lab-full-ops/hosts.yml playbooks/lab-full-ops-baseline-check.yml
 ```
 
-Expected high-level result:
+Expected high-level result for the default reduced profile:
 
 ```text
 bastion-01    | SUCCESS => ping=pong
 nginx-01      | SUCCESS => ping=pong
 app-01        | SUCCESS => ping=pong
-app-02        | SUCCESS => ping=pong
 db-primary-01 | SUCCESS => ping=pong
 nfs-01        | SUCCESS => ping=pong
 backup-01     | SUCCESS => ping=pong
-mon-01        | SUCCESS => ping=pong
-log-01        | SUCCESS => ping=pong
-loadgen-01    | SUCCESS => ping=pong
 ```
 
-The successful pings prove that the control path is ready for later NFS, backup, observability, logging, and load generation configuration.
+The successful pings prove that the Free Tier validation control path is ready for later NFS and backup configuration work.
+
+## Optional full-target check
+
+Only after creating optional Terraform nodes, validate them explicitly:
+
+```bash
+ansible -i inventories/lab-full-ops/hosts.yml lab_full_ops_optional -m ping
+```
+
+Do not include this in the default validation run.
 
 ## Baseline report
 
-The baseline check playbook writes one report per node:
+The baseline check playbook writes one report per default validation node:
 
 ```text
 /tmp/multitier-ops-platform/lab-full-ops-baseline-<inventory_hostname>.txt
@@ -162,6 +201,7 @@ The baseline check playbook writes one report per node:
 Each report records:
 
 - project and environment
+- validation profile
 - inventory host
 - node role
 - expected tier
