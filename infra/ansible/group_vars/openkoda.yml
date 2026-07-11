@@ -1,0 +1,18 @@
+---
+# OpenKoda is an upstream open-source application.
+# This repository only provisions and operates it as a portfolio workload.
+
+openkoda_work_dir: /opt/openkoda
+openkoda_compose_file: /opt/openkoda/docker-compose.yaml
+openkoda_report_dir: /tmp/multitier-ops-platform
+openkoda_report_file: /tmp/multitier-ops-platform/openkoda-runtime.txt
+
+# Upstream Docker Compose file used for the first single-node runtime proof.
+openkoda_compose_source_url: https://raw.githubusercontent.com/openkoda/openkoda/main/docker/docker-compose.yaml
+
+openkoda_host_port: 8080
+openkoda_healthcheck_url: https://localhost:8080
+openkoda_container_name: openkoda
+openkoda_postgres_container_name: postgres-db
+
+docker_apt_channel: stable
