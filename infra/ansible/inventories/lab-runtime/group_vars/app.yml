@@ -1,0 +1,5 @@
+node_role: app
+app_private_node: true
+app_has_public_ip: false
+app_private_egress_mode: nat-gateway
+runtime_egress_expected: true
