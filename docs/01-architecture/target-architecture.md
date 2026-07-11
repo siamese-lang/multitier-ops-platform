@@ -30,7 +30,7 @@ OpenKoda may be used as a representative internal-business workload, but it is n
 
 ### Phase 0. `lab-runtime`
 
-Already validated.
+Completed.
 
 Purpose:
 
@@ -65,7 +65,7 @@ What it does not prove:
 
 ### Phase 1. `lab-full-min`
 
-Next target.
+Completed minimum WEB/WAS/DB operating baseline.
 
 ```text
 [Public Subnet]
@@ -80,7 +80,7 @@ Next target.
 - db-primary-01
 ```
 
-Primary design questions:
+Primary design questions already validated in Phase 1:
 
 - How does Nginx route to multiple app nodes?
 - What health/readiness signal is used for app nodes?
@@ -89,17 +89,25 @@ Primary design questions:
 - What command proves DB connectivity and connection count?
 - What changes when one app node is stopped?
 
-Expected first incident evidence:
+Completed incident evidence:
 
 ```text
 app-01 stop
 -> Nginx upstream behavior observed
--> app-02 continues serving requests
+-> app-02 continued serving requests
 -> access/error logs and HTTP results recorded
 -> app-01 recovery verified
 ```
 
 ### Phase 2. `lab-full-ops`
+
+Next target.
+
+Detailed design:
+
+```text
+docs/01-architecture/lab-full-ops-storage-backup-observability.md
+```
 
 ```text
 [Private Storage Subnet]
@@ -114,6 +122,7 @@ app-01 stop
 
 Primary design questions:
 
+- What file storage behavior proves DB metadata and file object consistency?
 - What metrics change during app/WAS/DB/storage failure?
 - Which logs are needed to narrow down the cause?
 - What backup artifacts are produced?
@@ -168,4 +177,4 @@ backup -> db/storage: backup and restore operations
 
 This document is the corrected target architecture baseline.
 
-The currently completed `lab-runtime` work is Phase 0 evidence only. The next architecture implementation must target `lab-full-min` WEB/WAS/DB separation.
+The currently completed work includes Phase 0 `lab-runtime` and Phase 1 `lab-full-min`. The next architecture implementation must target Phase 2 `lab-full-ops` storage, backup, observability, logging, and load generation expansion.
