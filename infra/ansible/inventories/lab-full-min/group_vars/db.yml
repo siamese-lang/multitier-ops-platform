@@ -1,0 +1,28 @@
+---
+# PostgreSQL primary defaults for lab-full-min.
+# Do not put real production secrets in this file.
+
+postgresql_version: "14"
+postgresql_cluster_name: main
+postgresql_service_name: postgresql
+
+postgresql_conf_dir: "/etc/postgresql/{{ postgresql_version }}/{{ postgresql_cluster_name }}"
+postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_version }}/{{ postgresql_cluster_name }}"
+postgresql_listen_addresses: "*"
+postgresql_port: 5432
+
+# lab-full-min Terraform default app subnet CIDR.
+# Override this in local inventory if the subnet CIDR changes.
+lab_full_min_app_cidr: "10.40.11.0/24"
+
+ops_db_name: opsdb
+ops_db_user: ops_user
+
+# Supply this from ignored hosts.yml, --extra-vars, or future Ansible Vault.
+# Example:
+# ansible-playbook ... -e 'ops_db_password=<strong-local-password>'
+ops_db_password: ""
+
+postgresql_log_min_duration_statement_ms: 500
+postgresql_report_dir: /tmp/multitier-ops-platform
+postgresql_report_file: "{{ postgresql_report_dir }}/lab-full-min-postgresql-primary-{{ inventory_hostname }}.txt"
