@@ -1,0 +1,232 @@
+---
+- name: Run lab-full-min app-01 failure drill through Nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    app_failure_target: app-01
+    app_survivor_target: app-02
+    app_service_name: ops-sample-service
+
+    app_failure_drill_request_count: 8
+    app_failure_drill_pause_seconds: 1
+    app_failure_drill_request_prefix: lab-full-min-app01-failure
+
+    app_failure_drill_https_health_url: https://127.0.0.1/healthz
+    app_failure_drill_https_node_url: https://127.0.0.1/node
+    app_failure_drill_https_summary_url: https://127.0.0.1/api/work-orders/summary
+
+    app_failure_drill_access_log: /var/log/nginx/ops_access.log
+    app_failure_drill_error_log: /var/log/nginx/ops_error.log
+    app_failure_drill_report_dir: /tmp/multitier-ops-platform
+    app_failure_drill_report_file: "{{ app_failure_drill_report_dir }}/lab-full-min-app-failure-drill-{{ inventory_hostname }}.txt"
+
+  pre_tasks:
+    - name: Assert app inventory group exists
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['app'] | length >= 2
+        fail_msg: app group must contain at least two app nodes before running this drill.
+
+    - name: Assert target and survivor app hosts exist
+      ansible.builtin.assert:
+        that:
+          - app_failure_target in groups['app']
+          - app_survivor_target in groups['app']
+        fail_msg: app_failure_target and app_survivor_target must exist in the app inventory group.
+
+    - name: Assert target and survivor are different hosts
+      ansible.builtin.assert:
+        that:
+          - app_failure_target != app_survivor_target
+        fail_msg: app_failure_target and app_survivor_target must be different hosts.
+
+  tasks:
+    - name: Check Nginx service before drill
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_pre_state
+      changed_when: false
+
+    - name: Check app service state before drill
+      ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+      delegate_to: "{{ item }}"
+      loop:
+        - "{{ app_failure_target }}"
+        - "{{ app_survivor_target }}"
+      register: app_pre_states
+      changed_when: false
+
+    - name: Check baseline HTTPS health through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ app_failure_drill_https_health_url }}"
+      register: baseline_health_check
+      changed_when: false
+
+    - name: Check baseline HTTPS DB-backed summary through Nginx
+      ansible.builtin.command: "curl -k -fsS {{ app_failure_drill_https_summary_url }}"
+      register: baseline_summary_check
+      changed_when: false
+
+    - name: Run app-01 failure and recovery block
+      block:
+        - name: Stop target app service
+          ansible.builtin.service:
+            name: "{{ app_service_name }}"
+            state: stopped
+          delegate_to: "{{ app_failure_target }}"
+
+        - name: Confirm target app service is inactive
+          ansible.builtin.shell: "systemctl is-active {{ app_service_name }} || true"
+          delegate_to: "{{ app_failure_target }}"
+          register: target_stopped_state
+          changed_when: false
+          failed_when: target_stopped_state.stdout == 'active'
+
+        - name: Confirm survivor app service remains active
+          ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+          delegate_to: "{{ app_survivor_target }}"
+          register: survivor_during_failure_state
+          changed_when: false
+          failed_when: survivor_during_failure_state.stdout != 'active'
+
+        - name: Allow Nginx passive upstream failure handling to observe target stop
+          ansible.builtin.pause:
+            seconds: 2
+
+        - name: Send repeated HTTPS requests through Nginx while target is stopped
+          ansible.builtin.shell: |
+            set -euo pipefail
+
+            curl_with_retry() {
+              local url="$1"
+              local request_id="$2"
+              local attempt
+
+              for attempt in 1 2 3; do
+                if curl -k -fsS -H "X-Request-Id: ${request_id}" "$url"; then
+                  return 0
+                fi
+                sleep 1
+              done
+
+              return 1
+            }
+
+            for i in $(seq 1 {{ app_failure_drill_request_count }}); do
+              health_request_id="{{ app_failure_drill_request_prefix }}-${i}-healthz"
+              node_request_id="{{ app_failure_drill_request_prefix }}-${i}-node"
+              summary_request_id="{{ app_failure_drill_request_prefix }}-${i}-summary"
+
+              echo "--- request ${i} healthz ---"
+              curl_with_retry "{{ app_failure_drill_https_health_url }}" "${health_request_id}"
+              echo
+
+              echo "--- request ${i} node ---"
+              curl_with_retry "{{ app_failure_drill_https_node_url }}" "${node_request_id}"
+              echo
+
+              echo "--- request ${i} summary ---"
+              curl_with_retry "{{ app_failure_drill_https_summary_url }}" "${summary_request_id}"
+              echo
+
+              sleep {{ app_failure_drill_pause_seconds }}
+            done
+          args:
+            executable: /bin/bash
+          register: failure_window_requests
+          changed_when: false
+
+        - name: Read Nginx access log after failure window
+          ansible.builtin.shell: "tail -n 80 {{ app_failure_drill_access_log }} 2>/dev/null || true"
+          register: access_log_after_failure
+          changed_when: false
+
+        - name: Read Nginx error log after failure window
+          ansible.builtin.shell: "tail -n 80 {{ app_failure_drill_error_log }} 2>/dev/null || true"
+          register: error_log_after_failure
+          changed_when: false
+
+      always:
+        - name: Restart target app service after drill
+          ansible.builtin.service:
+            name: "{{ app_service_name }}"
+            state: started
+          delegate_to: "{{ app_failure_target }}"
+
+        - name: Wait for target app HTTP port after recovery
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[app_failure_target].ansible_host }}"
+            port: "{{ hostvars[app_failure_target].expected_app_port | default(8080) }}"
+            timeout: 60
+          delegate_to: "{{ app_failure_target }}"
+
+        - name: Confirm target app service is active after recovery
+          ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+          delegate_to: "{{ app_failure_target }}"
+          register: target_recovered_state
+          changed_when: false
+
+        - name: Confirm survivor app service is active after recovery
+          ansible.builtin.command: "systemctl is-active {{ app_service_name }}"
+          delegate_to: "{{ app_survivor_target }}"
+          register: survivor_recovered_state
+          changed_when: false
+
+    - name: Check HTTPS summary through Nginx after recovery
+      ansible.builtin.command: "curl -k -fsS {{ app_failure_drill_https_summary_url }}"
+      register: post_recovery_summary_check
+      changed_when: false
+
+    - name: Create app failure drill report directory
+      ansible.builtin.file:
+        path: "{{ app_failure_drill_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write app failure drill validation report
+      ansible.builtin.copy:
+        dest: "{{ app_failure_drill_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          drill=app_failure_nginx_upstream_bypass
+          app_failure_target={{ app_failure_target }}
+          app_survivor_target={{ app_survivor_target }}
+          app_service_name={{ app_service_name }}
+          nginx_pre_state={{ nginx_pre_state.stdout | default('n/a') }}
+          target_stopped_state={{ target_stopped_state.stdout | default('n/a') }}
+          survivor_during_failure_state={{ survivor_during_failure_state.stdout | default('n/a') }}
+          target_recovered_state={{ target_recovered_state.stdout | default('n/a') }}
+          survivor_recovered_state={{ survivor_recovered_state.stdout | default('n/a') }}
+          baseline_health_rc={{ baseline_health_check.rc | default('n/a') }}
+          baseline_summary_rc={{ baseline_summary_check.rc | default('n/a') }}
+          failure_window_requests_rc={{ failure_window_requests.rc | default('n/a') }}
+          post_recovery_summary_rc={{ post_recovery_summary_check.rc | default('n/a') }}
+          request_count={{ app_failure_drill_request_count }}
+          access_log={{ app_failure_drill_access_log }}
+          error_log={{ app_failure_drill_error_log }}
+
+    - name: Display app failure drill report
+      ansible.builtin.command: "cat {{ app_failure_drill_report_file }}"
+      register: app_failure_drill_report
+      changed_when: false
+
+    - name: Show app failure drill report
+      ansible.builtin.debug:
+        var: app_failure_drill_report.stdout_lines
+
+    - name: Show failure window request outputs
+      ansible.builtin.debug:
+        var: failure_window_requests.stdout_lines
+
+    - name: Show Nginx access log after failure window
+      ansible.builtin.debug:
+        var: access_log_after_failure.stdout_lines
+
+    - name: Show Nginx error log after failure window
+      ansible.builtin.debug:
+        var: error_log_after_failure.stdout_lines
