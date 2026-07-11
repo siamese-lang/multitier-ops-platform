@@ -1,0 +1,63 @@
+---
+- name: Verify lab-full-ops Ansible control path and node classification
+  hosts: lab_full_ops
+  gather_facts: true
+
+  tasks:
+    - name: Show lab-full-ops host identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host | default('n/a') }}"
+          hostname: "{{ ansible_facts['hostname'] | default('n/a') }}"
+          default_ipv4: "{{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}"
+          distribution: "{{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}"
+          os_family: "{{ ansible_facts['os_family'] | default('n/a') }}"
+          node_role: "{{ node_role | default('undefined') }}"
+          node_tier: "{{ node_tier | default('undefined') }}"
+          ssh_path: "{{ ssh_path | default('undefined') }}"
+          expected_public_entrypoint: "{{ expected_public_entrypoint | default('undefined') }}"
+          group_names: "{{ group_names }}"
+
+    - name: Ensure lab-full-ops baseline report directory exists
+      ansible.builtin.file:
+        path: "{{ lab_full_ops_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write lab-full-ops baseline report
+      ansible.builtin.copy:
+        dest: "{{ lab_full_ops_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          architecture={{ lab_full_ops_expected_architecture }}
+          control_policy={{ lab_full_ops_control_policy }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          default_ipv4={{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}
+          distribution={{ ansible_facts['distribution'] | default('n/a') }} {{ ansible_facts['distribution_version'] | default('n/a') }}
+          node_role={{ node_role | default('undefined') }}
+          node_tier={{ node_tier | default('undefined') }}
+          ssh_path={{ ssh_path | default('undefined') }}
+          expected_public_entrypoint={{ expected_public_entrypoint | default('undefined') }}
+          expected_http_entrypoint={{ expected_http_entrypoint | default(false) }}
+          expected_http_port={{ expected_http_port | default('not_web') }}
+          expected_https_port={{ expected_https_port | default('not_web') }}
+          expected_app_port={{ expected_app_port | default('not_app') }}
+          expected_db_port={{ expected_db_port | default('not_db') }}
+          expected_nfs_port={{ expected_nfs_port | default('not_storage') }}
+          expected_node_exporter_port={{ expected_node_exporter_port | default('not_monitoring_target') }}
+          expected_loki_push_port={{ expected_loki_push_port | default('not_logging_target') }}
+          group_names={{ group_names | join(',') }}
+
+    - name: Read lab-full-ops baseline report
+      ansible.builtin.command: "cat {{ lab_full_ops_report_file }}"
+      changed_when: false
+      register: lab_full_ops_baseline_report
+
+    - name: Display lab-full-ops baseline report
+      ansible.builtin.debug:
+        var: lab_full_ops_baseline_report.stdout_lines
