@@ -1,0 +1,164 @@
+---
+- name: Configure lab-full-min PostgreSQL primary
+  hosts: db
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert DB password is supplied outside the repository
+      ansible.builtin.assert:
+        that:
+          - ops_db_password is defined
+          - ops_db_password | length >= 12
+        fail_msg: >-
+          ops_db_password must be supplied from ignored inventory, --extra-vars,
+          or future Ansible Vault. Do not commit a real DB password.
+
+  tasks:
+    - name: Install PostgreSQL packages
+      ansible.builtin.apt:
+        name:
+          - postgresql
+          - postgresql-client
+          - python3-psycopg2
+        state: present
+        update_cache: true
+
+    - name: Ensure PostgreSQL service is enabled and started
+      ansible.builtin.service:
+        name: "{{ postgresql_service_name }}"
+        enabled: true
+        state: started
+
+    - name: Configure PostgreSQL listen addresses
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/postgresql.conf"
+        regexp: "^#?listen_addresses\\s*="
+        line: "listen_addresses = '{{ postgresql_listen_addresses }}'"
+        backup: true
+      notify: Restart PostgreSQL
+
+    - name: Configure PostgreSQL port
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/postgresql.conf"
+        regexp: "^#?port\\s*="
+        line: "port = {{ postgresql_port }}"
+        backup: true
+      notify: Restart PostgreSQL
+
+    - name: Configure PostgreSQL log line prefix for incident evidence
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/postgresql.conf"
+        regexp: "^#?log_line_prefix\\s*="
+        line: "log_line_prefix = '%m [%p] user=%u db=%d app=%a client=%h '"
+        backup: true
+      notify: Restart PostgreSQL
+
+    - name: Configure PostgreSQL slow query logging threshold
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/postgresql.conf"
+        regexp: "^#?log_min_duration_statement\\s*="
+        line: "log_min_duration_statement = {{ postgresql_log_min_duration_statement_ms }}"
+        backup: true
+      notify: Restart PostgreSQL
+
+    - name: Allow app subnet to access opsdb through pg_hba
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/pg_hba.conf"
+        insertafter: EOF
+        line: "host    {{ ops_db_name }}    {{ ops_db_user }}    {{ lab_full_min_app_cidr }}    scram-sha-256"
+        state: present
+        backup: true
+      notify: Restart PostgreSQL
+
+    - name: Flush PostgreSQL handlers before DB/user creation
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create ops database user
+      ansible.builtin.command: >-
+        sudo -u postgres psql -tAc
+        "DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ ops_db_user }}') THEN
+            CREATE ROLE {{ ops_db_user }} LOGIN PASSWORD '{{ ops_db_password }}';
+          ELSE
+            ALTER ROLE {{ ops_db_user }} WITH LOGIN PASSWORD '{{ ops_db_password }}';
+          END IF;
+        END
+        \$\$;"
+      changed_when: true
+      no_log: true
+
+    - name: Create ops database
+      ansible.builtin.command: >-
+        sudo -u postgres psql -tAc
+        "SELECT 'CREATE DATABASE {{ ops_db_name }} OWNER {{ ops_db_user }}'
+         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ ops_db_name }}')" |
+        sudo -u postgres psql
+      args:
+        executable: /bin/bash
+      register: create_db_result
+      changed_when: "'CREATE DATABASE' in create_db_result.stdout"
+
+    - name: Grant database privileges to ops user
+      ansible.builtin.command: >-
+        sudo -u postgres psql -d {{ ops_db_name }} -c
+        "GRANT ALL PRIVILEGES ON DATABASE {{ ops_db_name }} TO {{ ops_db_user }};"
+      changed_when: false
+
+    - name: Check PostgreSQL service state
+      ansible.builtin.command: systemctl is-active postgresql
+      register: postgresql_service_state
+      changed_when: false
+
+    - name: Check PostgreSQL listening port
+      ansible.builtin.shell: "ss -ltnp | grep ':{{ postgresql_port }}' || true"
+      register: postgresql_listen_check
+      changed_when: false
+
+    - name: Check ops database with local psql
+      ansible.builtin.command: "sudo -u postgres psql -d {{ ops_db_name }} -tAc 'select now();'"
+      register: postgresql_now_check
+      changed_when: false
+
+    - name: Create PostgreSQL report directory
+      ansible.builtin.file:
+        path: "{{ postgresql_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write PostgreSQL primary validation report
+      ansible.builtin.copy:
+        dest: "{{ postgresql_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts['hostname'] | default('n/a') }}
+          node_role={{ node_role | default('db-primary') }}
+          node_tier={{ node_tier | default('private-db') }}
+          postgresql_service_state={{ postgresql_service_state.stdout | default('n/a') }}
+          postgresql_port={{ postgresql_port }}
+          lab_full_min_app_cidr={{ lab_full_min_app_cidr }}
+          ops_db_name={{ ops_db_name }}
+          ops_db_user={{ ops_db_user }}
+          listen_check={{ postgresql_listen_check.stdout | default('n/a') }}
+          db_now={{ postgresql_now_check.stdout | default('n/a') }}
+          log_min_duration_statement_ms={{ postgresql_log_min_duration_statement_ms }}
+
+    - name: Display PostgreSQL primary validation report
+      ansible.builtin.command: "cat {{ postgresql_report_file }}"
+      register: postgresql_report
+      changed_when: false
+
+    - name: Show PostgreSQL primary validation report
+      ansible.builtin.debug:
+        var: postgresql_report.stdout_lines
+
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.service:
+        name: "{{ postgresql_service_name }}"
+        state: restarted
