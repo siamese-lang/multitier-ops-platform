@@ -1,0 +1,45 @@
+---
+# Nginx WEB tier defaults for lab-full-ops.
+# This file contains no real secrets.
+
+nginx_service_name: nginx
+nginx_ops_server_name: "_"
+nginx_ops_http_port: 80
+nginx_ops_https_port: 443
+nginx_ops_app_port: 8080
+
+nginx_ops_site_name: ops-sample-service
+nginx_ops_site_available: /etc/nginx/sites-available/ops-sample-service.conf
+nginx_ops_site_enabled: /etc/nginx/sites-enabled/ops-sample-service.conf
+nginx_ops_default_site: /etc/nginx/sites-enabled/default
+
+nginx_ops_ssl_dir: /etc/nginx/ssl/lab-full-ops
+nginx_ops_ssl_cert: "{{ nginx_ops_ssl_dir }}/ops-sample-service.crt"
+nginx_ops_ssl_key: "{{ nginx_ops_ssl_dir }}/ops-sample-service.key"
+nginx_ops_self_signed_days: 30
+nginx_ops_tls_subject: "/CN=lab-full-ops.local"
+
+nginx_ops_access_log: /var/log/nginx/ops_access.log
+nginx_ops_error_log: /var/log/nginx/ops_error.log
+
+nginx_ops_upstream_name: ops_app_backend
+nginx_ops_upstream_method: least_conn
+nginx_ops_upstream_keepalive: 32
+nginx_ops_upstream_max_fails: 2
+nginx_ops_upstream_fail_timeout: 10s
+
+nginx_ops_proxy_connect_timeout: 3s
+nginx_ops_proxy_send_timeout: 30s
+nginx_ops_proxy_read_timeout: 30s
+nginx_ops_proxy_next_upstream: "error timeout http_502 http_503 http_504"
+nginx_ops_proxy_next_upstream_tries: 2
+
+# Runtime checks. Set false only when intentionally testing partial deployment.
+nginx_ops_expect_upstream_ready: true
+nginx_ops_local_http_url: "http://127.0.0.1/healthz"
+nginx_ops_local_https_health_url: "https://127.0.0.1/healthz"
+nginx_ops_local_https_node_url: "https://127.0.0.1/node"
+nginx_ops_local_https_summary_url: "https://127.0.0.1/api/work-orders/summary"
+
+nginx_ops_report_dir: /tmp/multitier-ops-platform
+nginx_ops_report_file: "{{ nginx_ops_report_dir }}/lab-full-ops-nginx-reverse-proxy-{{ inventory_hostname }}.txt"
