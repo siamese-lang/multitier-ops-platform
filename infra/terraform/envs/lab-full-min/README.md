@@ -28,7 +28,8 @@ This environment is not a Terraform showcase and is not an OpenKoda deployment t
 | Flow | Purpose |
 |---|---|
 | operator CIDR -> bastion-01:22 | controlled SSH entry point |
-| operator/web CIDR -> nginx-01:80 | WEB entry for later Nginx validation |
+| operator/web CIDR -> nginx-01:80 | HTTP entry and HTTP-to-HTTPS redirect validation |
+| operator/web CIDR -> nginx-01:443 | HTTPS entry for Nginx TLS termination and reverse proxy validation |
 | bastion SG -> nginx/app/db:22 | private node administration through bastion |
 | nginx SG -> app SG:8080 | WEB to WAS upstream traffic |
 | app SG -> db SG:5432 | WAS to PostgreSQL traffic |
@@ -45,6 +46,7 @@ versions.tf
 variables.tf
 locals.tf
 main.tf
+nginx_https_ingress.tf
 outputs.tf
 terraform.tfvars.example
 ```
