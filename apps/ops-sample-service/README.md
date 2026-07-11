@@ -2,15 +2,31 @@
 
 `ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab.
 
-It is not the subject of the portfolio. The service exists to create deterministic operating evidence for:
+This repository is an operations portfolio, not an application development portfolio. The service is intentionally small, but it is not an empty health-check app. It exists to create deterministic operating evidence for a VM-based multi-tier system.
+
+The fixed project theme is:
+
+```text
+AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
+```
+
+The app must therefore remain a workload used by the operating environment. It must not become the center of the project.
+
+## Role in the project
+
+OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added for Phase 1 because it gives the lab controllable WEB/WAS/DB behavior that can be used to verify incidents, logs, and recovery procedures.
+
+It provides deterministic evidence for:
 
 - Nginx upstream routing
 - WAS process health
 - DB-dependent readiness
 - app node identity
+- HTTP request logging
 - DB read/write traffic
 - DB-backed state changes
 - later `app-01` failure and `app-02` continuation drills
+- later PostgreSQL failure and recovery drills
 
 ## Runtime role
 
@@ -23,24 +39,29 @@ app-02
 
 Nginx routes traffic to both app nodes on port `8080`. PostgreSQL runs on `db-primary-01`.
 
-## Why this app exists
-
-The repository is an operations portfolio, not an application development portfolio. A large third-party application can make the project look realistic, but it can also hide the exact operating behavior that must be tested.
-
-This service is intentionally small, but it is not empty. It provides DB-backed work order data so the lab can prove:
+The evidence flow is:
 
 ```text
 HTTP request -> Nginx -> app-01/app-02 -> PostgreSQL
 ```
 
-The app supports enough data behavior for operational validation:
+## Data model
 
-- initial sample work orders
-- read traffic
-- write traffic
-- status update traffic
-- DB readiness failure when PostgreSQL is down
-- data continuity when traffic moves from one app node to another
+The service creates one table on the first DB-backed request:
+
+```text
+ops_work_orders
+```
+
+It inserts seed records when the table is empty. These records are deliberately tied to operating scenarios:
+
+- Nginx upstream validation
+- DB readiness validation
+- app node identity evidence
+- app-01 failure drill
+- PostgreSQL restart/recovery drill
+
+This gives the lab real data for read/write/state-change tests without turning the repository into a business application project.
 
 ## Build
 
@@ -185,6 +206,46 @@ Returns count by status.
 curl -s http://localhost:8080/api/work-orders/summary
 ```
 
+## Response evidence
+
+Every response includes node identity so the operator can prove which app node handled the request.
+
+Example fields:
+
+```text
+node.hostname
+node.localAddress
+node.role
+node.tier
+node.environment
+node.version
+```
+
+DB-backed work-order responses also include:
+
+```text
+operation
+durationMs
+```
+
+These fields are intentionally simple. They are evidence aids for Nginx upstream, app failover, and DB latency observations.
+
+## Request log evidence
+
+Every HTTP request is logged with fields suitable for incident evidence:
+
+```text
+event=http_request requestId=<id> method=<method> path=<path> status=<status> durationMs=<ms> remoteAddr=<ip> node=<hostname> role=<role> tier=<tier>
+```
+
+The service also returns an `X-Request-Id` response header. A caller can provide `X-Request-Id` to correlate curl output, Nginx access logs, and app logs.
+
+Example:
+
+```bash
+curl -i -H 'X-Request-Id: incident-app-01-001' http://<nginx-public-ip>/api/work-orders/summary
+```
+
 ## Operational evidence examples
 
 ### Nginx upstream routing
@@ -197,6 +258,7 @@ Expected evidence:
 
 - responses come from app nodes behind Nginx
 - hostname/localAddress changes between app instances when both are healthy
+- Nginx access log and app request log share request timing evidence
 
 ### DB-backed data flow
 
@@ -223,6 +285,7 @@ Expected evidence:
 
 - Nginx continues routing to the remaining healthy app node
 - DB-backed records remain available
+- app logs show only the surviving node receiving requests after failover
 
 ### DB failure drill
 
@@ -238,6 +301,7 @@ Expected evidence:
 - `/healthz` can still return `200`
 - `/readyz` returns `503`
 - DB-backed API returns `503`
+- app request logs show DB-backed endpoints failing while process health remains up
 - after PostgreSQL recovery, readiness and data APIs return to normal
 
 ## Environment variables
@@ -257,10 +321,13 @@ Expected evidence:
 
 This app does not include:
 
+- UI development
 - authentication
-- UI screens
-- complex business workflow
 - OpenKoda customization
+- complex business features
+- file storage
+- PostgreSQL replication
+- backup and restore automation
 - deployment automation
 - Nginx configuration
 - incident drill automation
