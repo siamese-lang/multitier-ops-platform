@@ -107,13 +107,17 @@ From `infra/ansible`:
 
 ```bash
 export ANSIBLE_CONFIG="$PWD/ansible.cfg"
+cp inventories/lab-full-ops/hosts.yml.example /tmp/lab-full-ops-hosts.yml
 ansible-playbook \
-  -i inventories/lab-full-ops/hosts.yml.example \
+  -i /tmp/lab-full-ops-hosts.yml \
   playbooks/lab-full-ops-nfs-storage-baseline.yml \
   --syntax-check
+rm -f /tmp/lab-full-ops-hosts.yml
 ```
 
-This does not contact AWS instances.
+The temporary copy is intentional. Some Ansible versions do not treat `.yml.example` as a YAML inventory source, even though the content is valid YAML.
+
+This check does not contact AWS instances.
 
 ## Batched runtime validation commands
 
