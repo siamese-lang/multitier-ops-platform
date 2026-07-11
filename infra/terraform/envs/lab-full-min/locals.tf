@@ -7,21 +7,21 @@ locals {
   )
 
   app_nodes = {
-    app-01 = {
+    "app-01" = {
       name = "app-01"
     }
-    app-02 = {
+    "app-02" = {
       name = "app-02"
     }
   }
 
   common_tags = merge(
     {
-      Project     = var.project_name
-      Environment = var.environment
-      ManagedBy   = "terraform"
-      Scope       = "lab-full-min"
-      Repository  = "siamese-lang/multitier-ops-platform"
+      Project      = var.project_name
+      Environment  = var.environment
+      ManagedBy    = "terraform"
+      Scope        = "lab-full-min"
+      Repository   = "siamese-lang/multitier-ops-platform"
       Architecture = "web-was-db"
     },
     var.extra_tags
