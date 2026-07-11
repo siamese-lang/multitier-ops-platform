@@ -10,6 +10,10 @@ Evidence is the core output of this project. Each implementation issue must prod
 - Summarize large logs and store full logs only when safe.
 - Do not store secrets, private keys, AWS access keys, database passwords, session tokens, or personal information.
 
+## Evidence index
+
+- [`2026-07-11-lab-runtime-openkoda`](./2026-07-11-lab-runtime-openkoda/) - Terraform `lab-runtime` apply, private app Ansible control path, Docker/OpenKoda single-node deployment, local health check, and teardown evidence.
+
 ## Recommended directory naming
 
 Use one of the following patterns:
