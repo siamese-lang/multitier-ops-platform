@@ -4,75 +4,69 @@ all:
     ansible_ssh_private_key_file: /home/<wsl-user>/.ssh/my-web-key.pem
     ansible_ssh_common_args: "-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
   children:
+    # Default validation group matching the Terraform Free Tier profile.
     lab_full_ops:
       children:
-        bastion:
-          hosts:
-            bastion-01:
-              ansible_host: <bastion_public_ip>
-              node_role: bastion
-              node_tier: public-control
-              ssh_path: direct-from-operator
-              expected_public_entrypoint: true
-        web:
-          vars:
-            ansible_ssh_common_args: >-
-              -o IdentitiesOnly=yes
-              -o StrictHostKeyChecking=accept-new
-              -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
-          hosts:
-            nginx-01:
-              ansible_host: <nginx_private_ip>
-              node_role: web
-              node_tier: public-web
-              ssh_path: bastion-proxy
-              expected_public_entrypoint: true
-              expected_http_entrypoint: true
-              expected_http_port: 80
-              expected_https_port: 443
-        private_nodes:
-          vars:
-            ansible_ssh_common_args: >-
-              -o IdentitiesOnly=yes
-              -o StrictHostKeyChecking=accept-new
-              -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
+        lab_full_ops_free_tier:
           children:
-            app:
+            bastion:
               hosts:
-                app-01:
-                  ansible_host: <app_01_private_ip>
-                  node_role: app
-                  node_tier: private-was
-                  ssh_path: bastion-proxy
-                  expected_public_entrypoint: false
-                  expected_app_port: 8080
-                app-02:
-                  ansible_host: <app_02_private_ip>
-                  node_role: app
-                  node_tier: private-was
-                  ssh_path: bastion-proxy
-                  expected_public_entrypoint: false
-                  expected_app_port: 8080
-            db:
+                bastion-01:
+                  ansible_host: <bastion_public_ip>
+                  node_role: bastion
+                  node_tier: public-control
+                  ssh_path: direct-from-operator
+                  expected_public_entrypoint: true
+            web:
+              vars:
+                ansible_ssh_common_args: >-
+                  -o IdentitiesOnly=yes
+                  -o StrictHostKeyChecking=accept-new
+                  -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
               hosts:
-                db-primary-01:
-                  ansible_host: <db_primary_private_ip>
-                  node_role: db-primary
-                  node_tier: private-db
+                nginx-01:
+                  ansible_host: <nginx_private_ip>
+                  node_role: web
+                  node_tier: public-web
                   ssh_path: bastion-proxy
-                  expected_public_entrypoint: false
-                  expected_db_port: 5432
-            storage:
-              hosts:
-                nfs-01:
-                  ansible_host: <nfs_01_private_ip>
-                  node_role: storage
-                  node_tier: private-storage
-                  ssh_path: bastion-proxy
-                  expected_public_entrypoint: false
-                  expected_nfs_port: 2049
-            ops_nodes:
+                  expected_public_entrypoint: true
+                  expected_http_entrypoint: true
+                  expected_http_port: 80
+                  expected_https_port: 443
+            private_nodes:
+              vars:
+                ansible_ssh_common_args: >-
+                  -o IdentitiesOnly=yes
+                  -o StrictHostKeyChecking=accept-new
+                  -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
               children:
+                app:
+                  hosts:
+                    app-01:
+                      ansible_host: <app_01_private_ip>
+                      node_role: app
+                      node_tier: private-was
+                      ssh_path: bastion-proxy
+                      expected_public_entrypoint: false
+                      expected_app_port: 8080
+                db:
+                  hosts:
+                    db-primary-01:
+                      ansible_host: <db_primary_private_ip>
+                      node_role: db-primary
+                      node_tier: private-db
+                      ssh_path: bastion-proxy
+                      expected_public_entrypoint: false
+                      expected_db_port: 5432
+                storage:
+                  hosts:
+                    nfs-01:
+                      ansible_host: <nfs_01_private_ip>
+                      node_role: storage
+                      node_tier: private-storage
+                      ssh_path: bastion-proxy
+                      expected_public_entrypoint: false
+                      expected_nfs_port: 2049
                 backup:
                   hosts:
                     backup-01:
@@ -81,29 +75,48 @@ all:
                       node_tier: private-ops
                       ssh_path: bastion-proxy
                       expected_public_entrypoint: false
-                monitoring:
-                  hosts:
-                    mon-01:
-                      ansible_host: <mon_01_private_ip>
-                      node_role: monitoring
-                      node_tier: private-ops
-                      ssh_path: bastion-proxy
-                      expected_public_entrypoint: false
-                      expected_node_exporter_port: 9100
-                logging:
-                  hosts:
-                    log-01:
-                      ansible_host: <log_01_private_ip>
-                      node_role: logging
-                      node_tier: private-ops
-                      ssh_path: bastion-proxy
-                      expected_public_entrypoint: false
-                      expected_loki_push_port: 3100
-                loadgen:
-                  hosts:
-                    loadgen-01:
-                      ansible_host: <loadgen_01_private_ip>
-                      node_role: loadgen
-                      node_tier: private-ops
-                      ssh_path: bastion-proxy
-                      expected_public_entrypoint: false
+
+    # Optional nodes for an explicit full-topology validation run.
+    # Leave these placeholders unchanged when using the default Terraform profile.
+    lab_full_ops_optional:
+      vars:
+        ansible_ssh_common_args: >-
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=accept-new
+          -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
+      children:
+        app_optional:
+          hosts:
+            app-02:
+              ansible_host: <app_02_private_ip>
+              node_role: app
+              node_tier: private-was
+              ssh_path: bastion-proxy
+              expected_public_entrypoint: false
+              expected_app_port: 8080
+        monitoring:
+          hosts:
+            mon-01:
+              ansible_host: <mon_01_private_ip>
+              node_role: monitoring
+              node_tier: private-ops
+              ssh_path: bastion-proxy
+              expected_public_entrypoint: false
+              expected_node_exporter_port: 9100
+        logging:
+          hosts:
+            log-01:
+              ansible_host: <log_01_private_ip>
+              node_role: logging
+              node_tier: private-ops
+              ssh_path: bastion-proxy
+              expected_public_entrypoint: false
+              expected_loki_push_port: 3100
+        loadgen:
+          hosts:
+            loadgen-01:
+              ansible_host: <loadgen_01_private_ip>
+              node_role: loadgen
+              node_tier: private-ops
+              ssh_path: bastion-proxy
+              expected_public_entrypoint: false
