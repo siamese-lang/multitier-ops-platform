@@ -1,0 +1,5 @@
+# Local inventory contains real IP addresses and private key paths.
+hosts.yml
+
+# Ansible retry files must not be committed.
+*.retry
