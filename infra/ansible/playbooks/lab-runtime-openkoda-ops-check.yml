@@ -1,0 +1,80 @@
+---
+- name: Check OpenKoda runtime status on private app node
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/openkoda.yml
+
+  tasks:
+    - name: Show OpenKoda ops-check target identity
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          ansible_host: "{{ ansible_host | default('n/a') }}"
+          hostname: "{{ ansible_facts.get('hostname', 'n/a') }}"
+          default_ipv4: "{{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}"
+          distribution: "{{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}"
+          app_private_node: "{{ app_private_node | default('not_set') }}"
+          app_has_public_ip: "{{ app_has_public_ip | default('not_set') }}"
+          app_private_egress_mode: "{{ app_private_egress_mode | default('not_set') }}"
+
+    - name: Check Docker service state
+      ansible.builtin.command: systemctl is-active docker
+      register: docker_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Read OpenKoda Docker Compose status
+      ansible.builtin.command: docker compose -f {{ openkoda_compose_file }} ps
+      args:
+        chdir: "{{ openkoda_work_dir }}"
+      register: openkoda_compose_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Run local OpenKoda health check
+      ansible.builtin.command: curl -I {{ openkoda_healthcheck_url }} --max-time 10
+      register: openkoda_healthcheck
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure OpenKoda ops report directory exists
+      ansible.builtin.file:
+        path: "{{ openkoda_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write OpenKoda ops-check report
+      ansible.builtin.copy:
+        dest: "{{ openkoda_report_dir }}/openkoda-ops-check.txt"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          check_type=openkoda-ops-check
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          hostname={{ ansible_facts.get('hostname', 'n/a') }}
+          default_ipv4={{ ansible_facts.get('default_ipv4', {}).get('address', 'n/a') }}
+          distribution={{ ansible_facts.get('distribution', 'n/a') }} {{ ansible_facts.get('distribution_version', 'n/a') }}
+          app_private_node={{ app_private_node | default('not_set') }}
+          app_has_public_ip={{ app_has_public_ip | default('not_set') }}
+          app_private_egress_mode={{ app_private_egress_mode | default('not_set') }}
+          docker_service_state_rc={{ docker_service_state.rc }}
+          docker_service_state={{ docker_service_state.stdout | default('n/a') }}
+          openkoda_compose_file={{ openkoda_compose_file }}
+          openkoda_compose_ps_rc={{ openkoda_compose_ps.rc }}
+          openkoda_healthcheck_url={{ openkoda_healthcheck_url }}
+          openkoda_healthcheck_rc={{ openkoda_healthcheck.rc }}
+          openkoda_healthcheck_first_line={{ (openkoda_healthcheck.stdout_lines | default(['n/a']))[0] }}
+
+    - name: Display OpenKoda ops-check report
+      ansible.builtin.command: cat {{ openkoda_report_dir }}/openkoda-ops-check.txt
+      register: openkoda_ops_check_report
+      changed_when: false
+
+    - name: Print OpenKoda ops-check report
+      ansible.builtin.debug:
+        var: openkoda_ops_check_report.stdout_lines
