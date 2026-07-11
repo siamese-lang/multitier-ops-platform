@@ -1,0 +1,101 @@
+---
+- name: Configure lab-full-ops nfs-01 file storage baseline
+  hosts: storage
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Confirm this playbook is limited to storage-tier hosts
+      ansible.builtin.assert:
+        that:
+          - "'storage' in group_names"
+          - node_role | default('') == 'storage'
+        fail_msg: "This playbook must run only against the lab-full-ops storage group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook prepares nfs-01 storage baseline only."
+          - "Do not run it as a standalone runtime check for every PR."
+          - "In the default no-NAT Free Tier profile, package installation requires a planned package-access strategy."
+
+  tasks:
+    - name: Install NFS server package
+      ansible.builtin.apt:
+        name: "{{ nfs_server_package }}"
+        state: present
+        update_cache: true
+      when: nfs_manage_packages | bool
+
+    - name: Ensure NFS export root directory exists
+      ansible.builtin.file:
+        path: "{{ nfs_export_root }}"
+        state: directory
+        owner: "{{ nfs_export_owner }}"
+        group: "{{ nfs_export_group }}"
+        mode: "{{ nfs_export_mode }}"
+
+    - name: Ensure exports.d directory exists
+      ansible.builtin.file:
+        path: /etc/exports.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write lab-full-ops NFS export configuration
+      ansible.builtin.copy:
+        dest: "{{ nfs_export_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible for multitier-ops-platform lab-full-ops.
+          # Export only to the app and backup/ops private subnet CIDRs.
+          {% for cidr in nfs_export_allowed_cidrs %}
+          {{ nfs_export_root }} {{ cidr }}({{ nfs_export_options }})
+          {% endfor %}
+      notify: Reload NFS exports
+
+    - name: Enable and start NFS server service
+      ansible.builtin.service:
+        name: "{{ nfs_server_service }}"
+        state: started
+        enabled: true
+      when: nfs_manage_service | bool
+
+    - name: Flush NFS export handlers before verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Check NFS export root directory state
+      ansible.builtin.stat:
+        path: "{{ nfs_export_root }}"
+      register: nfs_export_root_stat
+
+    - name: Read configured NFS export file
+      ansible.builtin.command: "cat {{ nfs_export_file }}"
+      changed_when: false
+      register: nfs_export_file_content
+
+    - name: Read active NFS export table
+      ansible.builtin.command: exportfs -v
+      changed_when: false
+      register: nfs_exportfs_output
+      when: nfs_manage_service | bool
+
+    - name: Display nfs-01 storage baseline evidence
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          export_root: "{{ nfs_export_root }}"
+          export_root_exists: "{{ nfs_export_root_stat.stat.exists }}"
+          export_root_mode: "{{ nfs_export_root_stat.stat.mode | default('n/a') }}"
+          export_file: "{{ nfs_export_file }}"
+          allowed_cidrs: "{{ nfs_export_allowed_cidrs }}"
+          export_file_lines: "{{ nfs_export_file_content.stdout_lines }}"
+          active_exports: "{{ nfs_exportfs_output.stdout_lines | default([]) }}"
+
+  handlers:
+    - name: Reload NFS exports
+      ansible.builtin.command: exportfs -ra
+      when: nfs_manage_service | bool
