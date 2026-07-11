@@ -1,0 +1,29 @@
+---
+# Storage-tier defaults for lab-full-ops nfs-01.
+# Runtime execution requires package access on nfs-01. In the default no-NAT
+# Free Tier profile, run this only during a batched validation window where the
+# package-install strategy is intentionally available.
+
+nfs_manage_packages: true
+nfs_manage_service: true
+
+nfs_server_package: nfs-kernel-server
+nfs_server_service: nfs-server
+
+nfs_export_root: /srv/ops-sample/files
+nfs_export_owner: root
+nfs_export_group: root
+nfs_export_mode: "0775"
+
+nfs_export_file: /etc/exports.d/multitier-ops-platform.exports
+nfs_export_options: rw,sync,no_subtree_check,root_squash
+
+# Default lab-full-ops CIDRs from Terraform.
+# App nodes use private_app_subnet_cidr. Backup nodes use private_ops_subnet_cidr.
+nfs_export_allowed_cidrs:
+  - 10.50.11.0/24
+  - 10.50.41.0/24
+
+nfs_validation_commands:
+  - exportfs -v
+  - systemctl is-active nfs-server
