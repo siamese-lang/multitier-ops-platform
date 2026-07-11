@@ -1,6 +1,6 @@
 # ops-sample-service
 
-`ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab.
+`ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab and the later `lab-full-ops` storage consistency validation path.
 
 This repository is an operations portfolio, not an application development portfolio. The service is intentionally small, but it is not an empty health-check app. It exists to create deterministic operating evidence for a VM-based multi-tier system.
 
@@ -14,7 +14,7 @@ The app must therefore remain a workload used by the operating environment. It m
 
 ## Role in the project
 
-OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added for Phase 1 because it gives the lab controllable WEB/WAS/DB behavior that can be used to verify incidents, logs, and recovery procedures.
+OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added because it gives the lab controllable behavior that can be used to verify incidents, logs, storage consistency, and recovery procedures.
 
 It provides deterministic evidence for:
 
@@ -25,8 +25,10 @@ It provides deterministic evidence for:
 - HTTP request logging
 - DB read/write traffic
 - DB-backed state changes
+- DB metadata plus NFS file-object consistency checks in `lab-full-ops`
 - later `app-01` failure and `app-02` continuation drills
 - later PostgreSQL failure and recovery drills
+- later file storage failure, backup, and restore drills
 
 ## Runtime role
 
@@ -37,17 +39,24 @@ app-01
 app-02
 ```
 
-Nginx routes traffic to both app nodes on port `8080`. PostgreSQL runs on `db-primary-01`.
+Nginx routes traffic to app nodes on port `8080`. PostgreSQL runs on `db-primary-01`. In `lab-full-ops`, app nodes can also mount the NFS export from `nfs-01` at `/mnt/ops-sample/files`.
 
-The evidence flow is:
+The WEB/WAS/DB evidence flow is:
 
 ```text
 HTTP request -> Nginx -> app-01/app-02 -> PostgreSQL
 ```
 
+The storage consistency evidence flow is:
+
+```text
+HTTP request -> Nginx -> app-01 -> PostgreSQL metadata
+                                  -> NFS-mounted evidence file object
+```
+
 ## Data model
 
-The service creates one table on the first DB-backed request:
+The service creates one table on the first DB-backed work-order request:
 
 ```text
 ops_work_orders
@@ -61,7 +70,13 @@ It inserts seed records when the table is empty. These records are deliberately 
 - app-01 failure drill
 - PostgreSQL restart/recovery drill
 
-This gives the lab real data for read/write/state-change tests without turning the repository into a business application project.
+For `lab-full-ops`, the service also creates this table when the first evidence-file request succeeds:
+
+```text
+ops_work_order_evidence_files
+```
+
+That table links work-order records to generated evidence file objects stored under the configured mounted file path. This gives the lab a DB/file consistency target without turning the repository into a product file-management project.
 
 ## Build
 
@@ -76,6 +91,8 @@ The jar is created under:
 target/ops-sample-service-0.1.0.jar
 ```
 
+If local Maven is unavailable, use the existing GitHub Actions workflow artifact path documented in the deployment runbook instead of treating local Maven as required.
+
 ## Run without DB
 
 The service can start without DB environment variables. This is intentional because DB unavailability should be visible through readiness checks, not as an app startup failure.
@@ -87,29 +104,33 @@ java -jar target/ops-sample-service-0.1.0.jar
 Expected behavior:
 
 ```text
-GET /healthz                 -> 200
-GET /node                    -> 200
-GET /readyz                  -> 503 when DB env is missing
-GET /db/time                 -> 503 when DB env is missing
-GET /api/work-orders         -> 503 when DB env is missing
-GET /api/work-orders/summary -> 503 when DB env is missing
+GET  /healthz                                             -> 200
+GET  /node                                                -> 200
+GET  /readyz                                              -> 503 when DB env is missing
+GET  /db/time                                             -> 503 when DB env is missing
+GET  /api/work-orders                                     -> 503 when DB env is missing
+GET  /api/work-orders/summary                             -> 503 when DB env is missing
+POST /api/work-orders/{id}/evidence-files                 -> 503 when DB env is missing
+GET  /api/work-orders/{id}/evidence-files                 -> 503 when DB env is missing
+GET  /api/work-orders/{id}/evidence-files/{id}/consistency -> 503 when DB env is missing
 ```
 
-## Run with DB
+## Run with DB and file storage path
 
 ```bash
 export OPS_DB_URL='jdbc:postgresql://<db-primary-private-ip>:5432/opsdb'
 export OPS_DB_USERNAME='ops_user'
 export OPS_DB_PASSWORD='<password>'
+export OPS_EVIDENCE_FILE_ROOT='/mnt/ops-sample/files'
 export OPS_NODE_ROLE='app'
 export OPS_NODE_TIER='private-was'
-export OPS_ENVIRONMENT='lab-full-min'
+export OPS_ENVIRONMENT='lab-full-ops'
 export APP_VERSION='0.1.0'
 
 java -jar target/ops-sample-service-0.1.0.jar
 ```
 
-The first DB-backed request creates the `ops_work_orders` table if it does not exist and inserts sample data when the table is empty. This keeps app startup independent from DB availability while still giving the lab real data to operate.
+The app does not create or mount NFS. It only uses the file path provided by the operating environment. In `lab-full-ops`, that path should match the app-side NFS mount configured by Ansible.
 
 ## Endpoints
 
@@ -142,7 +163,7 @@ Node identity endpoint. It returns hostname, local address, role, tier, environm
 curl -s http://localhost:8080/node
 ```
 
-This endpoint is used to prove whether Nginx routed a request to `app-01` or `app-02`.
+This endpoint is used to prove which app instance served the request.
 
 ### `GET /db/time`
 
@@ -206,6 +227,59 @@ Returns count by status.
 curl -s http://localhost:8080/api/work-orders/summary
 ```
 
+### `POST /api/work-orders/{id}/evidence-files`
+
+Creates a small generated evidence file for an existing work order.
+
+```bash
+curl -s -X POST http://localhost:8080/api/work-orders/1/evidence-files
+```
+
+Expected behavior:
+
+```text
+1. Verify the work order exists in PostgreSQL.
+2. Write a generated evidence file under OPS_EVIDENCE_FILE_ROOT.
+3. Calculate file size and SHA-256.
+4. Store file metadata in PostgreSQL.
+5. Return metadata and immediate consistency result.
+```
+
+This is not a general upload endpoint. The service does not accept arbitrary user file content or file names.
+
+### `GET /api/work-orders/{id}/evidence-files`
+
+Lists evidence-file metadata for a work order.
+
+```bash
+curl -s http://localhost:8080/api/work-orders/1/evidence-files
+```
+
+### `GET /api/work-orders/{id}/evidence-files/{evidenceId}/consistency`
+
+Compares the PostgreSQL metadata row with the file object on the mounted path.
+
+```bash
+curl -s http://localhost:8080/api/work-orders/1/evidence-files/1/consistency
+```
+
+The consistency result reports:
+
+```text
+fileExists
+regularFile
+readable
+expectedSizeBytes
+actualSizeBytes
+sizeMatches
+expectedSha256
+actualSha256
+checksumMatches
+consistent
+```
+
+This endpoint is intended for storage failure, backup, and restore validation.
+
 ## Response evidence
 
 Every response includes node identity so the operator can prove which app node handled the request.
@@ -221,14 +295,14 @@ node.environment
 node.version
 ```
 
-DB-backed work-order responses also include:
+DB-backed work-order and evidence-file responses also include:
 
 ```text
 operation
 durationMs
 ```
 
-These fields are intentionally simple. They are evidence aids for Nginx upstream, app failover, and DB latency observations.
+These fields are evidence aids for Nginx upstream, app failover, DB latency, and DB/file consistency observations.
 
 ## Request log evidence
 
@@ -273,6 +347,25 @@ Expected evidence:
 - seeded records are returned
 - the same records are visible regardless of which app node served the request
 
+### DB/file consistency flow
+
+Run after `nfs-01` export and app mount baselines are applied in a batched runtime validation window.
+
+```bash
+curl -s http://<nginx-public-ip>/api/work-orders/1
+curl -s -X POST http://<nginx-public-ip>/api/work-orders/1/evidence-files
+curl -s http://<nginx-public-ip>/api/work-orders/1/evidence-files
+curl -s http://<nginx-public-ip>/api/work-orders/1/evidence-files/<evidenceId>/consistency
+```
+
+Expected evidence:
+
+- work-order metadata exists in PostgreSQL
+- evidence-file metadata exists in PostgreSQL
+- file object exists on the mounted path
+- file size and SHA-256 match metadata
+- response includes node identity for the app node that handled the request
+
 ### App node failure drill
 
 ```bash
@@ -309,9 +402,10 @@ Expected evidence:
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `SERVER_PORT` | No | HTTP port. Defaults to `8080`. |
-| `OPS_DB_URL` | For DB checks and work orders | PostgreSQL JDBC URL. |
-| `OPS_DB_USERNAME` | For DB checks and work orders | PostgreSQL username. |
-| `OPS_DB_PASSWORD` | For DB checks and work orders | PostgreSQL password. |
+| `OPS_DB_URL` | For DB checks, work orders, and evidence metadata | PostgreSQL JDBC URL. |
+| `OPS_DB_USERNAME` | For DB checks, work orders, and evidence metadata | PostgreSQL username. |
+| `OPS_DB_PASSWORD` | For DB checks, work orders, and evidence metadata | PostgreSQL password. |
+| `OPS_EVIDENCE_FILE_ROOT` | For evidence file objects | Mounted evidence file root. Defaults to `/mnt/ops-sample/files`. |
 | `OPS_NODE_ROLE` | No | Logical role. Defaults to `app`. |
 | `OPS_NODE_TIER` | No | Logical tier. Defaults to `private-was`. |
 | `OPS_ENVIRONMENT` | No | Environment name. Defaults to `lab-full-min`. |
@@ -325,7 +419,8 @@ This app does not include:
 - authentication
 - OpenKoda customization
 - complex business features
-- file storage
+- general file upload/download behavior
+- arbitrary user-provided file content
 - PostgreSQL replication
 - backup and restore automation
 - deployment automation
