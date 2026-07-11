@@ -1,0 +1,19 @@
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: /home/<wsl-user>/.ssh/my-web-key.pem
+    ansible_ssh_common_args: "-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+  children:
+    bastion:
+      hosts:
+        bastion-01:
+          ansible_host: <bastion_public_ip>
+    app:
+      vars:
+        ansible_ssh_common_args: >-
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=accept-new
+          -o ProxyCommand="ssh -i /home/<wsl-user>/.ssh/my-web-key.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ubuntu@<bastion_public_ip>"
+      hosts:
+        app-01:
+          ansible_host: <app_private_ip>
