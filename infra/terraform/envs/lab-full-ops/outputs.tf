@@ -47,11 +47,11 @@ output "ubuntu_ami_id" {
 output "public_node_ips" {
   description = "Public and private IPs for public tier nodes."
   value = {
-    bastion-01 = {
+    "bastion-01" = {
       public_ip  = aws_instance.bastion.public_ip
       private_ip = aws_instance.bastion.private_ip
     }
-    nginx-01 = {
+    "nginx-01" = {
       public_ip  = aws_instance.nginx.public_ip
       private_ip = aws_instance.nginx.private_ip
     }
@@ -61,13 +61,13 @@ output "public_node_ips" {
 output "private_node_ips" {
   description = "Private IPs for lab-full-ops private nodes."
   value = {
-    app      = { for name, instance in aws_instance.app : name => instance.private_ip }
-    db       = { db-primary-01 = aws_instance.db_primary.private_ip }
-    storage  = { nfs-01 = aws_instance.nfs.private_ip }
-    backup   = { backup-01 = aws_instance.backup.private_ip }
-    metrics  = { mon-01 = aws_instance.monitoring.private_ip }
-    logs     = { log-01 = aws_instance.logging.private_ip }
-    loadgen  = { loadgen-01 = aws_instance.loadgen.private_ip }
+    app     = { for name, instance in aws_instance.app : name => instance.private_ip }
+    db      = { "db-primary-01" = aws_instance.db_primary.private_ip }
+    storage = { "nfs-01" = aws_instance.nfs.private_ip }
+    backup  = { "backup-01" = aws_instance.backup.private_ip }
+    metrics = { "mon-01" = aws_instance.monitoring.private_ip }
+    logs    = { "log-01" = aws_instance.logging.private_ip }
+    loadgen = { "loadgen-01" = aws_instance.loadgen.private_ip }
   }
 }
 
@@ -99,13 +99,13 @@ output "ssh_proxycommand_templates" {
   description = "ProxyCommand SSH templates through bastion-01. Replace <path-to-private-key> before use."
   value = merge(
     {
-      nginx-01      = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nginx.private_ip}"
-      db-primary-01 = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.db_primary.private_ip}"
-      nfs-01        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nfs.private_ip}"
-      backup-01     = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.backup.private_ip}"
-      mon-01        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.monitoring.private_ip}"
-      log-01        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.logging.private_ip}"
-      loadgen-01    = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.loadgen.private_ip}"
+      "nginx-01"      = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nginx.private_ip}"
+      "db-primary-01" = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.db_primary.private_ip}"
+      "nfs-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.nfs.private_ip}"
+      "backup-01"     = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.backup.private_ip}"
+      "mon-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.monitoring.private_ip}"
+      "log-01"        = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.logging.private_ip}"
+      "loadgen-01"    = "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${aws_instance.loadgen.private_ip}"
     },
     {
       for name, instance in aws_instance.app : name => "ssh -i <path-to-private-key> -o IdentitiesOnly=yes -o ProxyCommand=\"ssh -i <path-to-private-key> -o IdentitiesOnly=yes -W %h:%p ubuntu@${aws_instance.bastion.public_ip}\" ubuntu@${instance.private_ip}"
