@@ -1,0 +1,9 @@
+---
+# lab-full-ops uses the same ops-sample-service deployment procedure as
+# lab-full-min, but receives lab-full-ops-specific values from
+# inventories/lab-full-ops/group_vars/app.yml.
+#
+# This wrapper prevents a second copy of the deployment logic while giving the
+# storage-validation environment a clear playbook entry point.
+
+- import_playbook: lab-full-min-ops-sample-service.yml
