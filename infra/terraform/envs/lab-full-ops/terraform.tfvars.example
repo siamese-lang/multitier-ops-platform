@@ -12,26 +12,46 @@ web_ingress_cidr = "<your-public-ip>/32"
 # Terraform references this key pair but never stores private key material.
 key_name = "<existing-ec2-key-pair-name>"
 
+# Default Free Tier validation profile:
+# - creates bastion-01, nginx-01, app-01, db-primary-01, nfs-01, backup-01
+# - does not create app-02, mon-01, log-01, loadgen-01
+# - does not create NAT Gateway
+# Keep all validation runs short-lived and destroy immediately after evidence collection.
+# enable_nat_gateway     = false
+# enable_app_02          = false
+# enable_storage_node    = true
+# enable_backup_node     = true
+# enable_monitoring_node = false
+# enable_logging_node    = false
+# enable_loadgen_node    = false
+
+# Full target topology options. Enable only for an intentional full validation run.
+# enable_app_02          = true
+# enable_monitoring_node = true
+# enable_logging_node    = true
+# enable_loadgen_node    = true
+# enable_nat_gateway     = true
+
 # Optional CIDR overrides.
-# vpc_cidr                     = "10.50.0.0/16"
-# public_subnet_cidr           = "10.50.1.0/24"
-# private_app_subnet_cidr      = "10.50.11.0/24"
-# private_db_subnet_cidr       = "10.50.21.0/24"
-# private_storage_subnet_cidr  = "10.50.31.0/24"
-# private_ops_subnet_cidr      = "10.50.41.0/24"
+# vpc_cidr                    = "10.50.0.0/16"
+# public_subnet_cidr          = "10.50.1.0/24"
+# private_app_subnet_cidr     = "10.50.11.0/24"
+# private_db_subnet_cidr      = "10.50.21.0/24"
+# private_storage_subnet_cidr = "10.50.31.0/24"
+# private_ops_subnet_cidr     = "10.50.41.0/24"
 
 # Optional instance and volume overrides.
-# Defaults use t2.micro to keep the 10-node skeleton under common 16 vCPU lab quotas.
-# bastion_instance_type        = "t2.micro"
-# nginx_instance_type          = "t2.micro"
-# app_instance_type            = "t2.micro"
-# db_instance_type             = "t2.micro"
-# storage_instance_type        = "t2.micro"
-# backup_instance_type         = "t2.micro"
-# monitoring_instance_type     = "t2.micro"
-# logging_instance_type        = "t2.micro"
-# loadgen_instance_type        = "t2.micro"
-# root_volume_size_gib         = 20
-# storage_root_volume_size_gib = 30
-# backup_root_volume_size_gib  = 30
+# Defaults use t3.micro because this account rejected t2.micro as not Free Tier eligible.
+# bastion_instance_type        = "t3.micro"
+# nginx_instance_type          = "t3.micro"
+# app_instance_type            = "t3.micro"
+# db_instance_type             = "t3.micro"
+# storage_instance_type        = "t3.micro"
+# backup_instance_type         = "t3.micro"
+# monitoring_instance_type     = "t3.micro"
+# logging_instance_type        = "t3.micro"
+# loadgen_instance_type        = "t3.micro"
+# root_volume_size_gib         = 8
+# storage_root_volume_size_gib = 8
+# backup_root_volume_size_gib  = 8
 # availability_zone            = "ap-northeast-2a"

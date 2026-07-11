@@ -124,6 +124,8 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_eip" "nat" {
+  count = var.enable_nat_gateway ? 1 : 0
+
   domain = "vpc"
 
   depends_on = [aws_internet_gateway.this]
@@ -135,7 +137,9 @@ resource "aws_eip" "nat" {
 }
 
 resource "aws_nat_gateway" "this" {
-  allocation_id = aws_eip.nat.id
+  count = var.enable_nat_gateway ? 1 : 0
+
+  allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public.id
 
   tags = {
@@ -149,14 +153,17 @@ resource "aws_nat_gateway" "this" {
 resource "aws_route_table" "private_app" {
   vpc_id = aws_vpc.this.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+  dynamic "route" {
+    for_each = var.enable_nat_gateway ? [1] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.this[0].id
+    }
   }
 
   tags = {
     Name = "${local.name_prefix}-private-app-rt"
-    Note = "NAT-enabled route for private app dependency retrieval"
+    Note = var.enable_nat_gateway ? "NAT-enabled route for private app dependency retrieval" : "No default egress route in free-tier validation mode"
   }
 }
 
@@ -168,14 +175,17 @@ resource "aws_route_table_association" "private_app" {
 resource "aws_route_table" "private_db" {
   vpc_id = aws_vpc.this.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+  dynamic "route" {
+    for_each = var.enable_nat_gateway ? [1] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.this[0].id
+    }
   }
 
   tags = {
     Name = "${local.name_prefix}-private-db-rt"
-    Note = "NAT-enabled route for private DB package installation"
+    Note = var.enable_nat_gateway ? "NAT-enabled route for private DB package installation" : "No default egress route in free-tier validation mode"
   }
 }
 
@@ -187,14 +197,17 @@ resource "aws_route_table_association" "private_db" {
 resource "aws_route_table" "private_storage" {
   vpc_id = aws_vpc.this.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+  dynamic "route" {
+    for_each = var.enable_nat_gateway ? [1] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.this[0].id
+    }
   }
 
   tags = {
     Name = "${local.name_prefix}-private-storage-rt"
-    Note = "NAT-enabled route for private storage package installation"
+    Note = var.enable_nat_gateway ? "NAT-enabled route for private storage package installation" : "No default egress route in free-tier validation mode"
   }
 }
 
@@ -206,14 +219,17 @@ resource "aws_route_table_association" "private_storage" {
 resource "aws_route_table" "private_ops" {
   vpc_id = aws_vpc.this.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+  dynamic "route" {
+    for_each = var.enable_nat_gateway ? [1] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.this[0].id
+    }
   }
 
   tags = {
     Name = "${local.name_prefix}-private-ops-rt"
-    Note = "NAT-enabled route for private ops package installation"
+    Note = var.enable_nat_gateway ? "NAT-enabled route for private ops package installation" : "No default egress route in free-tier validation mode"
   }
 }
 
@@ -271,7 +287,7 @@ resource "aws_security_group" "nginx" {
   }
 
   ingress {
-    description     = "HTTPS from loadgen-01 for private failure drills"
+    description     = "HTTPS from loadgen SG for private failure drills when loadgen-01 is enabled"
     from_port       = var.web_https_port
     to_port         = var.web_https_port
     protocol        = "tcp"
@@ -310,7 +326,7 @@ resource "aws_security_group" "nginx" {
 
 resource "aws_security_group" "app" {
   name        = "${local.name_prefix}-sg-app"
-  description = "WAS tier access for app-01 and app-02"
+  description = "WAS tier access for app nodes"
   vpc_id      = aws_vpc.this.id
 
   ingress {
@@ -338,7 +354,7 @@ resource "aws_security_group" "app" {
   }
 
   egress {
-    description = "Allow outbound traffic to DB, storage, logging, and NAT route for dependency retrieval"
+    description = "Allow outbound traffic to DB, storage, logging, and optional NAT route for dependency retrieval"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -373,7 +389,7 @@ resource "aws_security_group" "db" {
   }
 
   ingress {
-    description     = "PostgreSQL from backup-01 for pg_dump"
+    description     = "PostgreSQL from backup SG for pg_dump when backup-01 is enabled"
     from_port       = var.db_port
     to_port         = var.db_port
     protocol        = "tcp"
@@ -424,7 +440,7 @@ resource "aws_security_group" "storage" {
   }
 
   ingress {
-    description     = "NFS from backup-01 for file backup"
+    description     = "NFS from backup SG for file backup when backup-01 is enabled"
     from_port       = var.nfs_port
     to_port         = var.nfs_port
     protocol        = "tcp"
@@ -712,6 +728,8 @@ resource "aws_instance" "db_primary" {
 }
 
 resource "aws_instance" "nfs" {
+  count = var.enable_storage_node ? 1 : 0
+
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.storage_instance_type
   subnet_id                   = aws_subnet.private_storage.id
@@ -741,6 +759,8 @@ resource "aws_instance" "nfs" {
 }
 
 resource "aws_instance" "backup" {
+  count = var.enable_backup_node ? 1 : 0
+
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.backup_instance_type
   subnet_id                   = aws_subnet.private_ops.id
@@ -770,6 +790,8 @@ resource "aws_instance" "backup" {
 }
 
 resource "aws_instance" "monitoring" {
+  count = var.enable_monitoring_node ? 1 : 0
+
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.monitoring_instance_type
   subnet_id                   = aws_subnet.private_ops.id
@@ -799,6 +821,8 @@ resource "aws_instance" "monitoring" {
 }
 
 resource "aws_instance" "logging" {
+  count = var.enable_logging_node ? 1 : 0
+
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.logging_instance_type
   subnet_id                   = aws_subnet.private_ops.id
@@ -828,6 +852,8 @@ resource "aws_instance" "logging" {
 }
 
 resource "aws_instance" "loadgen" {
+  count = var.enable_loadgen_node ? 1 : 0
+
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.loadgen_instance_type
   subnet_id                   = aws_subnet.private_ops.id
