@@ -113,6 +113,48 @@
       until: prometheus_ready_check.status == 200
       changed_when: false
 
+    - name: Wait for Prometheus target registration
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export EXPECTED_TARGET_COUNT="{{ prometheus_node_exporter_targets | length }}"
+        curl -fsS "{{ prometheus_listen_url }}/api/v1/targets?state=any" | python3 -c '
+        import json, os, sys
+        expected = int(os.environ["EXPECTED_TARGET_COUNT"])
+        payload = json.load(sys.stdin)
+        targets = payload.get("data", {}).get("activeTargets", [])
+        healthy = [target for target in targets if target.get("health") == "up"]
+        print(f"active_targets={len(targets)} healthy_targets={len(healthy)} expected={expected}")
+        sys.exit(0 if len(targets) >= expected else 1)
+        '
+      args:
+        executable: /bin/bash
+      register: prometheus_targets_wait
+      retries: 20
+      delay: 3
+      until: prometheus_targets_wait.rc == 0
+      changed_when: false
+
+    - name: Wait for Prometheus up query to report expected node exporter targets
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export EXPECTED_TARGET_COUNT="{{ prometheus_node_exporter_targets | length }}"
+        curl -G -fsS "{{ prometheus_listen_url }}/api/v1/query" --data-urlencode 'query=up{job="node-exporter-operating-nodes"}' | python3 -c '
+        import json, os, sys
+        expected = int(os.environ["EXPECTED_TARGET_COUNT"])
+        payload = json.load(sys.stdin)
+        result = payload.get("data", {}).get("result", [])
+        healthy = [sample for sample in result if sample.get("value", [None, None])[1] == "1"]
+        print(f"up_results={len(result)} healthy_up_results={len(healthy)} expected={expected}")
+        sys.exit(0 if len(healthy) >= expected else 1)
+        '
+      args:
+        executable: /bin/bash
+      register: prometheus_up_wait
+      retries: 20
+      delay: 3
+      until: prometheus_up_wait.rc == 0
+      changed_when: false
+
     - name: Collect Prometheus scrape evidence
       ansible.builtin.shell: |
         set -euo pipefail
@@ -144,14 +186,20 @@
           echo "{{ target }}"
         {% endfor %}
           echo
+          echo "--- prometheus_target_registration_wait ---"
+          echo {{ prometheus_targets_wait.stdout | quote }}
+          echo
+          echo "--- prometheus_up_wait ---"
+          echo {{ prometheus_up_wait.stdout | quote }}
+          echo
           echo "--- prometheus_ready ---"
           curl -fsS {{ prometheus_listen_url }}/-/ready || true
           echo
           echo "--- prometheus_targets_api ---"
-          curl -fsS {{ prometheus_listen_url }}/api/v1/targets || true
+          curl -fsS '{{ prometheus_listen_url }}/api/v1/targets?state=any' || true
           echo
           echo "--- prometheus_up_query ---"
-          curl -G -fsS {{ prometheus_listen_url }}/api/v1/query --data-urlencode 'query=up' || true
+          curl -G -fsS {{ prometheus_listen_url }}/api/v1/query --data-urlencode 'query=up{job="node-exporter-operating-nodes"}' || true
         } > "${report_file}"
         cat "${report_file}"
       args:

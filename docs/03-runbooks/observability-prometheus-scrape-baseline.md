@@ -91,6 +91,8 @@ prometheus_status
 prometheus_listening_port
 prometheus_config_check
 prometheus_targets_configured
+prometheus_target_registration_wait
+prometheus_up_wait
 prometheus_ready
 prometheus_targets_api
 prometheus_up_query
@@ -106,11 +108,18 @@ Port 9090 is listening on mon-01.
 promtool check config succeeds.
 Configured targets include nginx-01, app-01, db-primary-01, nfs-01, and backup-01 private addresses on port 9100.
 Prometheus /-/ready returns success.
-/api/v1/targets returns the node-exporter-operating-nodes scrape job.
-The up query returns each expected operating-node target.
+/api/v1/targets?state=any returns the node-exporter-operating-nodes scrape job.
+The target registration wait reports the expected target count.
+The job-specific up query returns each expected operating-node target with value 1.
 ```
 
-The first runtime pass may expose security-group, inventory, or node_exporter binding issues. Treat those as useful operating findings, but document them separately from the final validated claim.
+Important runtime note:
+
+```text
+Prometheus /-/ready only proves that the HTTP server is ready. It does not by itself prove that scrape targets have registered or returned successful samples. The playbook must wait for both target registration and the job-specific up query before collecting final evidence.
+```
+
+The first runtime pass may expose security-group, inventory, node_exporter binding, or Prometheus scrape stabilization issues. Treat those as useful operating findings, but document them separately from the final validated claim.
 
 ## Failure diagnosis guide
 
@@ -120,13 +129,30 @@ If `/-/ready` fails:
 Inspect Prometheus service state and promtool config output on mon-01.
 ```
 
-If `/api/v1/targets` lists targets as down:
+If `/api/v1/targets?state=any` lists no active targets:
+
+```text
+Check whether Prometheus was restarted after writing the generated config.
+Check whether the playbook waited long enough for target registration.
+Check whether the generated config contains the expected static targets.
+Check /api/v1/status/config to confirm Prometheus loaded the expected config.
+```
+
+If `/api/v1/targets?state=any` lists targets as down:
 
 ```text
 Check whether node_exporter is active on the target node.
 Check whether port 9100 is listening locally on the target node.
 Check security group ingress from the monitoring security group.
 Check whether hostvars target private IPs match Terraform output.
+```
+
+If the job-specific `up{job="node-exporter-operating-nodes"}` query is empty:
+
+```text
+Check whether the configured job name in /etc/prometheus/prometheus.yml matches the query.
+Check whether old/manual Prometheus scrape jobs are producing stale or duplicate up series.
+Use the job-specific query for final evidence instead of an unfiltered up query.
 ```
 
 If only one tier is down:
@@ -142,5 +168,7 @@ This runbook does not create AWS resources. The runtime window should still foll
 ```text
 apply once -> configure baseline -> collect evidence -> destroy once
 ```
+
+When a monitoring-node runtime is already open, do not destroy and recreate just to run adjacent observability fixes. Continue collecting related evidence in the same window, then destroy only after the planned validation scope is complete.
 
 After validation, destroy AWS resources from Git Bash and preserve local evidence under `.tmp` or `/tmp` as appropriate.
