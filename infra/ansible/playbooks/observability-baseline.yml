@@ -90,6 +90,13 @@
         mode: "0644"
         content: "{{ observability_node_baseline.stdout }}\n"
 
+    - name: Fetch node baseline report to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/node-baseline-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
     - name: Collect WEB tier Nginx log and service evidence
       ansible.builtin.shell: |
         set -euo pipefail
@@ -125,6 +132,15 @@
         mode: "0644"
         content: "{{ observability_web_evidence.stdout }}\n"
       when: "'web' in group_names"
+
+    - name: Fetch WEB tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-web-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'web' in group_names"
 
     - name: Collect WAS tier service and journal evidence
       ansible.builtin.shell: |
@@ -162,6 +178,15 @@
         mode: "0644"
         content: "{{ observability_app_evidence.stdout }}\n"
       when: "'app' in group_names"
+
+    - name: Fetch WAS tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-app-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'app' in group_names"
 
     - name: Collect DB tier PostgreSQL service and log evidence
       ansible.builtin.shell: |
@@ -209,6 +234,15 @@
         content: "{{ observability_db_evidence.stdout }}\n"
       when: "'db' in group_names"
 
+    - name: Fetch DB tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-db-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'db' in group_names"
+
     - name: Collect Storage tier NFS and filesystem evidence
       ansible.builtin.shell: |
         set -euo pipefail
@@ -248,6 +282,15 @@
         content: "{{ observability_storage_evidence.stdout }}\n"
       when: "'storage' in group_names"
 
+    - name: Fetch Storage tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-storage-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'storage' in group_names"
+
     - name: Collect Backup/Ops tier artifact and job-log visibility evidence
       ansible.builtin.shell: |
         set -euo pipefail
@@ -281,13 +324,14 @@
         content: "{{ observability_backup_evidence.stdout }}\n"
       when: "'backup' in group_names"
 
-    - name: Fetch remote observability reports to controller evidence directory
+    - name: Fetch Backup/Ops tier evidence to controller evidence directory
       ansible.builtin.fetch:
-        src: "{{ item }}"
+        src: "{{ observability_remote_report_dir }}/service-baseline-backup-{{ inventory_hostname }}.txt"
         dest: "{{ observability_controller_evidence_dir }}/"
         flat: true
-      loop: "{{ lookup('ansible.builtin.fileglob', observability_remote_report_dir ~ '/*.txt', wantlist=True) }}"
-      when: observability_fetch_to_controller | bool
+      when:
+        - observability_fetch_to_controller | bool
+        - "'backup' in group_names"
 
 - name: Validate request-path observability through Nginx
   hosts: web
@@ -388,11 +432,10 @@
     - name: Capture app journal around request-path validation window
       ansible.builtin.shell: |
         set -euo pipefail
-        report_file="{{ observability_remote_report_dir }}/app-journal-correlated-from-{{ inventory_hostname }}.txt"
+        report_file="{{ observability_remote_report_dir }}/app-journal-correlated-{{ inventory_hostname }}.txt"
         {
-          echo "project={{ project_name | default('multitier-ops-platform') }}"
-          echo "environment={{ environment_name | default('lab-full-ops') }}"
-          echo "source_web={{ inventory_hostname }}"
+          echo "source_app={{ inventory_hostname }}"
+          echo "source_web={{ ansible_play_hosts | first }}"
           echo "service={{ observability_app_service_name }}"
           echo "collected_at=$(date -Is)"
           echo
@@ -408,14 +451,18 @@
       changed_when: false
       failed_when: false
 
-    - name: Fetch WEB request-path reports to controller evidence directory
+    - name: Fetch WEB request-path report to controller evidence directory
       ansible.builtin.fetch:
-        src: "{{ item }}"
+        src: "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.txt"
         dest: "{{ observability_controller_evidence_dir }}/"
         flat: true
-      loop:
-        - "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.txt"
-        - "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.tsv"
+      when: observability_fetch_to_controller | bool
+
+    - name: Fetch WEB request-path TSV to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.tsv"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
       when: observability_fetch_to_controller | bool
 
     - name: Show request-path observability report
@@ -648,15 +695,29 @@
               This does not prove HA, automatic failover, alerting maturity, or SLO/SLA compliance.
           when: observability_run_db_service_incident | bool
 
-        - name: Fetch DB service incident reports to controller evidence directory
+        - name: Fetch DB service incident probe TSV to controller evidence directory
           ansible.builtin.fetch:
-            src: "{{ item }}"
+            src: "{{ observability_remote_report_dir }}/incident-db-service-unavailable.tsv"
             dest: "{{ observability_controller_evidence_dir }}/"
             flat: true
-          loop:
-            - "{{ observability_remote_report_dir }}/incident-db-service-unavailable.tsv"
-            - "{{ observability_remote_report_dir }}/incident-nginx-db-service-unavailable-{{ inventory_hostname }}.txt"
-            - "{{ observability_remote_report_dir }}/incident-report-db-service-unavailable.md"
+          when:
+            - observability_run_db_service_incident | bool
+            - observability_fetch_to_controller | bool
+
+        - name: Fetch DB service incident Nginx report to controller evidence directory
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/incident-nginx-db-service-unavailable-{{ inventory_hostname }}.txt"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
+          when:
+            - observability_run_db_service_incident | bool
+            - observability_fetch_to_controller | bool
+
+        - name: Fetch DB service incident report to controller evidence directory
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/incident-report-db-service-unavailable.md"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
           when:
             - observability_run_db_service_incident | bool
             - observability_fetch_to_controller | bool
