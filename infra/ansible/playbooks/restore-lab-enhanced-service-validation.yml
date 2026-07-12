@@ -1,0 +1,380 @@
+---
+- name: Validate enhanced service recovery in restore-lab
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    enhanced_restore_request_prefix: restore-lab-enhanced-service
+    enhanced_restore_report_dir: /tmp/multitier-ops-platform
+    enhanced_restore_result_dir: "{{ enhanced_restore_report_dir }}/restore-lab-enhanced-service"
+    enhanced_restore_report_file: "{{ enhanced_restore_report_dir }}/restore-lab-enhanced-service-{{ inventory_hostname }}.txt"
+    enhanced_restore_base_url: https://127.0.0.1
+    enhanced_restore_db_host: db-primary-01
+    enhanced_restore_storage_host: nfs-01
+    enhanced_restore_db_name: "{{ ops_db_name | default('opsdb') }}"
+    enhanced_restore_nfs_export_root: /srv/ops-sample/files
+
+    # Supply these from the enhanced lab-full-ops validation window or preserved evidence notes.
+    # They intentionally have no production meaning; they identify the sample row/object expected
+    # after pg_restore + restic restore into restore-lab.
+    enhanced_restore_work_order_id: "{{ restore_lab_enhanced_work_order_id | default('') }}"
+    enhanced_restore_evidence_id: "{{ restore_lab_enhanced_evidence_id | default('') }}"
+    enhanced_restore_storage_path: "{{ restore_lab_enhanced_storage_path | default('') }}"
+    enhanced_restore_expected_size_bytes: "{{ restore_lab_enhanced_expected_size_bytes | default('') }}"
+    enhanced_restore_expected_sha256: "{{ restore_lab_enhanced_expected_sha256 | default('') }}"
+    enhanced_restore_expected_status: "{{ restore_lab_enhanced_expected_status | default('IN_PROGRESS') }}"
+    enhanced_restore_min_event_count: "{{ restore_lab_enhanced_min_event_count | default(2) }}"
+    enhanced_restore_min_audit_count: "{{ restore_lab_enhanced_min_audit_count | default(1) }}"
+
+  pre_tasks:
+    - name: Assert restore-lab inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['web'] is defined
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - enhanced_restore_db_host in groups['db']
+          - enhanced_restore_storage_host in groups['storage']
+        fail_msg: >-
+          restore-lab enhanced service validation requires web, app, db, and storage
+          groups after DB/file restore and app/Nginx deployment.
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+          - node_role | default('') == 'web'
+        fail_msg: "Run this restore-lab enhanced validation from nginx-01 through the web group."
+
+    - name: Assert expected enhanced restore sample values are supplied
+      ansible.builtin.assert:
+        that:
+          - enhanced_restore_work_order_id | string | length > 0
+          - enhanced_restore_evidence_id | string | length > 0
+          - enhanced_restore_storage_path | string | length > 0
+          - enhanced_restore_expected_size_bytes | string | length > 0
+          - enhanced_restore_expected_sha256 | string | length == 64
+        fail_msg: >-
+          Supply restore_lab_enhanced_work_order_id, restore_lab_enhanced_evidence_id,
+          restore_lab_enhanced_storage_path, restore_lab_enhanced_expected_size_bytes,
+          and restore_lab_enhanced_expected_sha256 from the enhanced runtime evidence.
+
+    - name: Show restore-lab enhanced validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This check validates enhanced service recovery after DB/file restore."
+          - "Expected work_order_id={{ enhanced_restore_work_order_id }}, evidence_id={{ enhanced_restore_evidence_id }}."
+          - "Expected storage_path={{ enhanced_restore_storage_path }}."
+          - "Expected SHA-256={{ enhanced_restore_expected_sha256 }}."
+          - "It does not create new restore data. It validates restored data only."
+
+  tasks:
+    - name: Ensure restore-lab enhanced result directory exists
+      ansible.builtin.file:
+        path: "{{ enhanced_restore_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate enhanced web/API recovery path through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ enhanced_restore_result_dir }}"
+        base_url="{{ enhanced_restore_base_url }}"
+        request_prefix="{{ enhanced_restore_request_prefix }}"
+        work_order_id="{{ enhanced_restore_work_order_id }}"
+        evidence_id="{{ enhanced_restore_evidence_id }}"
+        expected_storage_path="{{ enhanced_restore_storage_path }}"
+        expected_size="{{ enhanced_restore_expected_size_bytes }}"
+        expected_sha="{{ enhanced_restore_expected_sha256 }}"
+        expected_status="{{ enhanced_restore_expected_status }}"
+        min_event_count="{{ enhanced_restore_min_event_count }}"
+        min_audit_count="{{ enhanced_restore_min_audit_count }}"
+
+        health_headers="${result_dir}/healthz.headers"
+        ready_headers="${result_dir}/readyz.headers"
+        detail_html="${result_dir}/work-order-detail.html"
+        work_order_json="${result_dir}/work-order.json"
+        events_json="${result_dir}/events.json"
+        audit_json="${result_dir}/audit-logs.json"
+        evidence_list_json="${result_dir}/evidence-list.json"
+        consistency_json="${result_dir}/consistency.json"
+        downloaded_file="${result_dir}/downloaded-evidence.bin"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -D "${health_headers}" \
+          -H "X-Request-Id: ${request_prefix}-healthz" \
+          "${base_url}/healthz" \
+          > /dev/null
+
+        curl -k -fsS \
+          -D "${ready_headers}" \
+          -H "X-Request-Id: ${request_prefix}-readyz" \
+          "${base_url}/readyz" \
+          > /dev/null
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-detail-page" \
+          "${base_url}/work-orders/${work_order_id}" \
+          > "${detail_html}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-json" \
+          "${base_url}/api/work-orders/${work_order_id}" \
+          > "${work_order_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-events-json" \
+          "${base_url}/api/work-orders/${work_order_id}/events" \
+          > "${events_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-audit-json" \
+          "${base_url}/api/audit-logs?limit=100" \
+          > "${audit_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-list" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${consistency_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-download" \
+          "${base_url}/work-orders/${work_order_id}/evidence/${evidence_id}/download" \
+          > "${downloaded_file}"
+
+        detail_has_title=$(grep -q '작업 요청 상세' "${detail_html}" && echo true || echo false)
+        detail_has_events=$(grep -q '상태 이력' "${detail_html}" && echo true || echo false)
+        detail_has_evidence=$(grep -q '증빙 파일' "${detail_html}" && echo true || echo false)
+        detail_has_storage_path=$(grep -qF "${expected_storage_path}" "${detail_html}" && echo true || echo false)
+        detail_has_sha=$(grep -qF "${expected_sha}" "${detail_html}" && echo true || echo false)
+
+        python3 - \
+          "${work_order_json}" "${events_json}" "${audit_json}" "${evidence_list_json}" "${consistency_json}" \
+          "${work_order_id}" "${evidence_id}" "${expected_storage_path}" "${expected_size}" "${expected_sha}" "${expected_status}" "${min_event_count}" "${min_audit_count}" \
+          > "${parsed_kv}" <<'PY'
+        import json
+        import sys
+
+        work_order_json, events_json, audit_json, evidence_list_json, consistency_json = sys.argv[1:6]
+        work_order_id = int(sys.argv[6])
+        evidence_id = int(sys.argv[7])
+        expected_storage_path = sys.argv[8]
+        expected_size = int(sys.argv[9])
+        expected_sha = sys.argv[10]
+        expected_status = sys.argv[11]
+        min_event_count = int(sys.argv[12])
+        min_audit_count = int(sys.argv[13])
+
+        work_order = json.load(open(work_order_json))["data"]
+        events = json.load(open(events_json))["data"]
+        audit_rows = json.load(open(audit_json))["data"]
+        evidence_rows = json.load(open(evidence_list_json))["data"]
+        consistency = json.load(open(consistency_json))["consistency"]
+
+        if int(work_order["id"]) != work_order_id:
+            raise SystemExit("restored work order id mismatch")
+        if work_order["status"] != expected_status:
+            raise SystemExit(f"restored status mismatch: {work_order['status']} != {expected_status}")
+
+        matched_events = [row for row in events if int(row.get("workOrderId", -1)) == work_order_id]
+        if len(matched_events) < min_event_count:
+            raise SystemExit(f"insufficient restored events: {len(matched_events)} < {min_event_count}")
+
+        matched_audits = [row for row in audit_rows if row.get("targetType") == "work_order" and int(row.get("targetId", -1)) == work_order_id]
+        if len(matched_audits) < min_audit_count:
+            raise SystemExit(f"insufficient restored audit logs: {len(matched_audits)} < {min_audit_count}")
+
+        evidence_matches = [row for row in evidence_rows if int(row.get("id", -1)) == evidence_id and int(row.get("workOrderId", -1)) == work_order_id]
+        if not evidence_matches:
+            raise SystemExit("restored evidence metadata not found in API response")
+        evidence = evidence_matches[0]
+        if evidence["storagePath"] != expected_storage_path:
+            raise SystemExit("restored evidence storagePath mismatch")
+        if int(evidence["sizeBytes"]) != expected_size:
+            raise SystemExit("restored evidence size mismatch")
+        if evidence["sha256"] != expected_sha:
+            raise SystemExit("restored evidence sha256 mismatch")
+
+        required_flags = {
+            "consistent": True,
+            "fileExists": True,
+            "sizeMatches": True,
+            "checksumMatches": True,
+        }
+        for key, expected in required_flags.items():
+            if consistency.get(key) is not expected:
+                raise SystemExit(f"consistency flag mismatch: {key}={consistency.get(key)}")
+        if int(consistency["expectedSizeBytes"]) != expected_size or int(consistency["actualSizeBytes"]) != expected_size:
+            raise SystemExit("consistency size mismatch")
+        if consistency["expectedSha256"] != expected_sha or consistency["actualSha256"] != expected_sha:
+            raise SystemExit("consistency sha mismatch")
+
+        print(f"work_order_id={work_order_id}")
+        print(f"work_order_title={work_order['title']}")
+        print(f"work_order_status={work_order['status']}")
+        print(f"event_count={len(matched_events)}")
+        print(f"audit_count={len(matched_audits)}")
+        print(f"evidence_id={evidence_id}")
+        print(f"storage_path={evidence['storagePath']}")
+        print(f"metadata_size_bytes={evidence['sizeBytes']}")
+        print(f"metadata_sha256={evidence['sha256']}")
+        print(f"consistent={str(consistency['consistent']).lower()}")
+        print(f"file_exists={str(consistency['fileExists']).lower()}")
+        print(f"size_matches={str(consistency['sizeMatches']).lower()}")
+        print(f"checksum_matches={str(consistency['checksumMatches']).lower()}")
+        print(f"app_resolved_path={consistency.get('resolvedPath')}")
+        PY
+
+        downloaded_size=$(stat -c '%s' "${downloaded_file}")
+        downloaded_sha=$(sha256sum "${downloaded_file}" | awk '{print $1}')
+        test "${downloaded_size}" = "${expected_size}"
+        test "${downloaded_sha}" = "${expected_sha}"
+
+        test "${detail_has_title}" = "true"
+        test "${detail_has_events}" = "true"
+        test "${detail_has_evidence}" = "true"
+        test "${detail_has_storage_path}" = "true"
+        test "${detail_has_sha}" = "true"
+
+        {
+          echo "detail_has_title=${detail_has_title}"
+          echo "detail_has_events=${detail_has_events}"
+          echo "detail_has_evidence=${detail_has_evidence}"
+          echo "detail_has_storage_path=${detail_has_storage_path}"
+          echo "detail_has_sha=${detail_has_sha}"
+          echo "downloaded_size_bytes=${downloaded_size}"
+          echo "downloaded_sha256=${downloaded_sha}"
+          echo "detail_html=${detail_html}"
+          echo "work_order_json=${work_order_json}"
+          echo "events_json=${events_json}"
+          echo "audit_json=${audit_json}"
+          echo "evidence_list_json=${evidence_list_json}"
+          echo "consistency_json=${consistency_json}"
+          echo "downloaded_file=${downloaded_file}"
+        } >> "${parsed_kv}"
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: enhanced_restore_http_result
+      changed_when: false
+
+    - name: Extract enhanced restore values
+      ansible.builtin.set_fact:
+        enhanced_restore_actual_work_order_id: "{{ enhanced_restore_http_result.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_actual_status: "{{ enhanced_restore_http_result.stdout | regex_search('work_order_status=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_event_count: "{{ enhanced_restore_http_result.stdout | regex_search('event_count=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_audit_count: "{{ enhanced_restore_http_result.stdout | regex_search('audit_count=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_actual_storage_path: "{{ enhanced_restore_http_result.stdout | regex_search('storage_path=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_actual_sha256: "{{ enhanced_restore_http_result.stdout | regex_search('downloaded_sha256=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_consistent: "{{ enhanced_restore_http_result.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_file_exists: "{{ enhanced_restore_http_result.stdout | regex_search('file_exists=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_size_matches: "{{ enhanced_restore_http_result.stdout | regex_search('size_matches=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_checksum_matches: "{{ enhanced_restore_http_result.stdout | regex_search('checksum_matches=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_detail_has_storage_path: "{{ enhanced_restore_http_result.stdout | regex_search('detail_has_storage_path=([^\n]+)', '\\1') | first }}"
+        enhanced_restore_detail_has_sha: "{{ enhanced_restore_http_result.stdout | regex_search('detail_has_sha=([^\n]+)', '\\1') | first }}"
+
+    - name: Verify restored enhanced service rows directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ enhanced_restore_db_name }} -AtF $'\t' -c \
+          "select id, title, status, priority, requester, assignee from ops_work_orders where id = {{ enhanced_restore_work_order_id | int }};"
+        event_count=$(sudo -u postgres psql -d {{ enhanced_restore_db_name }} -At -c \
+          "select count(*) from ops_work_order_events where work_order_id = {{ enhanced_restore_work_order_id | int }};")
+        audit_count=$(sudo -u postgres psql -d {{ enhanced_restore_db_name }} -At -c \
+          "select count(*) from ops_operation_audit_logs where target_type = 'work_order' and target_id = {{ enhanced_restore_work_order_id | int }};")
+        sudo -u postgres psql -d {{ enhanced_restore_db_name }} -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ enhanced_restore_evidence_id | int }} and work_order_id = {{ enhanced_restore_work_order_id | int }};"
+        echo "event_count=${event_count}"
+        echo "audit_count=${audit_count}"
+        test "${event_count}" -ge {{ enhanced_restore_min_event_count | int }}
+        test "${audit_count}" -ge {{ enhanced_restore_min_audit_count | int }}
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ enhanced_restore_db_host }}"
+      register: enhanced_restore_db_rows
+      changed_when: false
+      failed_when: enhanced_restore_db_rows.rc != 0 or enhanced_restore_db_rows.stdout | length == 0
+
+    - name: Verify restored enhanced NFS object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ enhanced_restore_nfs_export_root }}/{{ enhanced_restore_storage_path }}"
+        test -f "${file}"
+        size=$(stat -c '%s' "${file}")
+        sha=$(sha256sum "${file}" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "${size}" = "{{ enhanced_restore_expected_size_bytes }}"
+        test "${sha}" = "{{ enhanced_restore_expected_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ enhanced_restore_storage_host }}"
+      register: enhanced_restore_nfs_object
+      changed_when: false
+
+    - name: Read enhanced restore Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ enhanced_restore_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 50 || true"
+      register: enhanced_restore_nginx_log
+      changed_when: false
+
+    - name: Read enhanced restore app journald request-id evidence
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ enhanced_restore_request_prefix }}' | tail -n 80 || true"
+      delegate_to: "{{ groups['app'][0] | default('app-01') }}"
+      register: enhanced_restore_app_log
+      changed_when: false
+
+    - name: Write enhanced restore-lab service validation report
+      ansible.builtin.copy:
+        dest: "{{ enhanced_restore_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          validation=restore-lab-enhanced-service
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          request_prefix={{ enhanced_restore_request_prefix }}
+          base_url={{ enhanced_restore_base_url }}
+          work_order_id={{ enhanced_restore_actual_work_order_id }}
+          expected_status={{ enhanced_restore_expected_status }}
+          actual_status={{ enhanced_restore_actual_status }}
+          event_count={{ enhanced_restore_event_count }}
+          audit_count={{ enhanced_restore_audit_count }}
+          evidence_id={{ enhanced_restore_evidence_id }}
+          storage_path={{ enhanced_restore_actual_storage_path }}
+          expected_size_bytes={{ enhanced_restore_expected_size_bytes }}
+          expected_sha256={{ enhanced_restore_expected_sha256 }}
+          actual_downloaded_sha256={{ enhanced_restore_actual_sha256 }}
+          consistent={{ enhanced_restore_consistent }}
+          file_exists={{ enhanced_restore_file_exists }}
+          size_matches={{ enhanced_restore_size_matches }}
+          checksum_matches={{ enhanced_restore_checksum_matches }}
+          detail_page_has_storage_path={{ enhanced_restore_detail_has_storage_path }}
+          detail_page_has_sha={{ enhanced_restore_detail_has_sha }}
+          db_rows={{ enhanced_restore_db_rows.stdout | default('n/a') }}
+          nfs_object={{ enhanced_restore_nfs_object.stdout | default('n/a') }}
+          nginx_log_sample={{ enhanced_restore_nginx_log.stdout | default('n/a') }}
+          app_log_sample={{ enhanced_restore_app_log.stdout | default('n/a') }}
+          restore_claim_boundary=Enhanced work order, event history, audit log, evidence metadata, NFS object, web detail page, download, and consistency endpoint validated after DB/file restore prerequisite.
+          enhanced_restore_status=validated_when_this_playbook_and_prior_db_file_restore_succeed
+          result_dir={{ enhanced_restore_result_dir }}
+
+    - name: Display enhanced restore-lab service validation report
+      ansible.builtin.command: "cat {{ enhanced_restore_report_file }}"
+      register: enhanced_restore_report
+      changed_when: false
+
+    - name: Show enhanced restore-lab service validation report
+      ansible.builtin.debug:
+        var: enhanced_restore_report.stdout_lines
