@@ -1,5 +1,5 @@
 [Unit]
-Description=ops-sample-service for lab-full-min
+Description={{ ops_app_name }} for {{ ops_app_environment }}
 Documentation=https://github.com/siamese-lang/multitier-ops-platform
 After=network-online.target
 Wants=network-online.target
@@ -28,7 +28,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths={{ ops_app_log_dir }} /tmp
+ReadWritePaths={{ ops_app_log_dir }} /tmp {{ effective_ops_evidence_file_root | default(ops_evidence_file_root | default('/mnt/ops-sample/files')) }}
 
 [Install]
 WantedBy=multi-user.target
