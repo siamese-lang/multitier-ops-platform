@@ -1,0 +1,244 @@
+---
+- name: Validate restore-lab HTTP and API consistency after DB/file restore
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    restore_lab_http_request_prefix: restore-lab-recovery
+    restore_lab_http_report_dir: /tmp/multitier-ops-platform
+    restore_lab_http_report_file: "{{ restore_lab_http_report_dir }}/restore-lab-http-api-consistency-{{ inventory_hostname }}.txt"
+    restore_lab_http_result_dir: "{{ restore_lab_http_report_dir }}/restore-lab-http-api-consistency"
+    restore_lab_http_base_url: https://127.0.0.1
+
+    restore_lab_http_db_host: db-primary-01
+    restore_lab_http_storage_host: nfs-01
+    restore_lab_http_db_name: "{{ ops_db_name | default('opsdb') }}"
+    restore_lab_http_nfs_export_root: /srv/ops-sample/files
+
+    # Values from docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md.
+    # The check intentionally uses restored source data instead of creating a new work order.
+    restore_lab_expected_work_order_count: 6
+    restore_lab_expected_evidence_count: 1
+    restore_lab_sample_evidence_id: 1
+    restore_lab_sample_work_order_id: 6
+    restore_lab_sample_storage_path: work-order-6/evidence-40219c94-cef8-4c1c-aa07-962938ed4b64.txt
+    restore_lab_sample_size_bytes: 215
+    restore_lab_sample_sha256: 4b4dc6fd2e07d5cd1713f846d9baf4c659209535872c5add945f65f252290150
+
+  pre_tasks:
+    - name: Assert restore-lab inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['web'] is defined
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - restore_lab_http_db_host in groups['db']
+          - restore_lab_http_storage_host in groups['storage']
+        fail_msg: >-
+          restore-lab HTTP/API consistency validation requires web, app, db,
+          and storage groups after DB/file restore and app/Nginx deployment.
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+          - node_role | default('') == 'web'
+        fail_msg: "Run this restore-lab validation from nginx-01 through the web group."
+
+    - name: Show restore-lab HTTP/API validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This check validates HTTP/API consistency after DB/file restore."
+          - "It does not create a new work order or evidence file."
+          - "Expected restored sample: work_order_id={{ restore_lab_sample_work_order_id }}, evidence_id={{ restore_lab_sample_evidence_id }}."
+          - "Expected SHA-256: {{ restore_lab_sample_sha256 }}."
+
+  tasks:
+    - name: Ensure restore-lab HTTP/API result directory exists
+      ansible.builtin.file:
+        path: "{{ restore_lab_http_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate health, readiness, summary, and restored evidence consistency through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ restore_lab_http_result_dir }}"
+        base_url="{{ restore_lab_http_base_url }}"
+        request_prefix="{{ restore_lab_http_request_prefix }}"
+
+        health_headers="${result_dir}/healthz.headers"
+        ready_headers="${result_dir}/readyz.headers"
+        summary_json="${result_dir}/work-orders-summary.json"
+        list_json="${result_dir}/restored-evidence-list.json"
+        consistency_json="${result_dir}/restored-evidence-consistency.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -D "${health_headers}" \
+          -H "X-Request-Id: ${request_prefix}-healthz" \
+          "${base_url}/healthz" \
+          > /dev/null
+
+        curl -k -fsS \
+          -D "${ready_headers}" \
+          -H "X-Request-Id: ${request_prefix}-readyz" \
+          "${base_url}/readyz" \
+          > /dev/null
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${summary_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-list-restored-evidence" \
+          "${base_url}/api/work-orders/{{ restore_lab_sample_work_order_id }}/evidence-files" \
+          > "${list_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-restored-consistency" \
+          "${base_url}/api/work-orders/{{ restore_lab_sample_work_order_id }}/evidence-files/{{ restore_lab_sample_evidence_id }}/consistency" \
+          > "${consistency_json}"
+
+        summary_total=$(python3 -c "import json; data=json.load(open('${summary_json}'))['data']; print(sum(int(v) for v in data.values()))")
+        restored_evidence_count=$(python3 -c "import json; print(len(json.load(open('${list_json}'))['data']))")
+        consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['checksumMatches']).lower())")
+        expected_size=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['expectedSizeBytes'])")
+        actual_size=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['actualSizeBytes'])")
+        expected_sha256=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['expectedSha256'])")
+        actual_sha256=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['actualSha256'])")
+        resolved_path=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['resolvedPath'])")
+
+        cat > "${parsed_kv}" <<EOF
+        summary_total=${summary_total}
+        restored_evidence_count=${restored_evidence_count}
+        consistency_status=${consistency_status}
+        consistent=${consistent}
+        file_exists=${file_exists}
+        size_matches=${size_matches}
+        checksum_matches=${checksum_matches}
+        expected_size_bytes=${expected_size}
+        actual_size_bytes=${actual_size}
+        expected_sha256=${expected_sha256}
+        actual_sha256=${actual_sha256}
+        resolved_path=${resolved_path}
+        summary_json=${summary_json}
+        list_json=${list_json}
+        consistency_json=${consistency_json}
+        EOF
+
+        cat "${parsed_kv}"
+
+        test "${summary_total}" = "{{ restore_lab_expected_work_order_count }}"
+        test "${restored_evidence_count}" = "{{ restore_lab_expected_evidence_count }}"
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+        test "${expected_size}" = "{{ restore_lab_sample_size_bytes }}"
+        test "${actual_size}" = "{{ restore_lab_sample_size_bytes }}"
+        test "${expected_sha256}" = "{{ restore_lab_sample_sha256 }}"
+        test "${actual_sha256}" = "{{ restore_lab_sample_sha256 }}"
+      args:
+        executable: /bin/bash
+      register: restore_lab_http_api_result
+      changed_when: false
+
+    - name: Extract restore-lab HTTP/API values
+      ansible.builtin.set_fact:
+        restore_lab_summary_total: "{{ restore_lab_http_api_result.stdout | regex_search('summary_total=([^\n]+)', '\\1') | first }}"
+        restore_lab_restored_evidence_count: "{{ restore_lab_http_api_result.stdout | regex_search('restored_evidence_count=([^\n]+)', '\\1') | first }}"
+        restore_lab_consistency_status: "{{ restore_lab_http_api_result.stdout | regex_search('consistency_status=([^\n]+)', '\\1') | first }}"
+        restore_lab_consistent: "{{ restore_lab_http_api_result.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        restore_lab_file_exists: "{{ restore_lab_http_api_result.stdout | regex_search('file_exists=([^\n]+)', '\\1') | first }}"
+        restore_lab_size_matches: "{{ restore_lab_http_api_result.stdout | regex_search('size_matches=([^\n]+)', '\\1') | first }}"
+        restore_lab_checksum_matches: "{{ restore_lab_http_api_result.stdout | regex_search('checksum_matches=([^\n]+)', '\\1') | first }}"
+        restore_lab_actual_sha256: "{{ restore_lab_http_api_result.stdout | regex_search('actual_sha256=([^\n]+)', '\\1') | first }}"
+        restore_lab_resolved_path: "{{ restore_lab_http_api_result.stdout | regex_search('resolved_path=([^\n]+)', '\\1') | first }}"
+
+    - name: Verify restored PostgreSQL metadata row directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ restore_lab_http_db_name }} -AtF $'\t' -c \
+          "select id, work_order_id, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ restore_lab_sample_evidence_id | int }} and work_order_id = {{ restore_lab_sample_work_order_id | int }};"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ restore_lab_http_db_host }}"
+      register: restore_lab_db_metadata_row
+      changed_when: false
+      failed_when: restore_lab_db_metadata_row.rc != 0 or restore_lab_db_metadata_row.stdout | length == 0
+
+    - name: Verify restored NFS file object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ restore_lab_http_nfs_export_root }}/{{ restore_lab_sample_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ restore_lab_sample_size_bytes }}"
+        test "$sha" = "{{ restore_lab_sample_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ restore_lab_http_storage_host }}"
+      register: restore_lab_nfs_file_object
+      changed_when: false
+
+    - name: Read restore-lab Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ restore_lab_http_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 20 || true"
+      register: restore_lab_nginx_log
+      changed_when: false
+
+    - name: Write restore-lab HTTP/API consistency report
+      ansible.builtin.copy:
+        dest: "{{ restore_lab_http_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          request_prefix={{ restore_lab_http_request_prefix }}
+          base_url={{ restore_lab_http_base_url }}
+          source_backup_id=lab-full-ops-backup-20260712T072623
+          sample_work_order_id={{ restore_lab_sample_work_order_id }}
+          sample_evidence_id={{ restore_lab_sample_evidence_id }}
+          sample_storage_path={{ restore_lab_sample_storage_path }}
+          expected_work_order_count={{ restore_lab_expected_work_order_count }}
+          restored_work_order_count={{ restore_lab_summary_total }}
+          expected_evidence_count={{ restore_lab_expected_evidence_count }}
+          restored_evidence_count={{ restore_lab_restored_evidence_count }}
+          api_consistency_status={{ restore_lab_consistency_status }}
+          api_consistent={{ restore_lab_consistent }}
+          file_exists={{ restore_lab_file_exists }}
+          size_matches={{ restore_lab_size_matches }}
+          checksum_matches={{ restore_lab_checksum_matches }}
+          expected_sha256={{ restore_lab_sample_sha256 }}
+          actual_sha256={{ restore_lab_actual_sha256 }}
+          app_resolved_path={{ restore_lab_resolved_path }}
+          db_metadata_row={{ restore_lab_db_metadata_row.stdout | default('n/a') }}
+          nfs_file_object_check={{ restore_lab_nfs_file_object.stdout | default('n/a') }}
+          nginx_log_sample={{ restore_lab_nginx_log.stdout | default('n/a') }}
+          db_file_restore_status=validated_by_restore_baseline_prerequisite
+          http_api_restore_status=validated
+          recovery_status=validated_when_this_playbook_and_prior_db_file_restore_succeed
+
+    - name: Display restore-lab HTTP/API consistency report
+      ansible.builtin.command: "cat {{ restore_lab_http_report_file }}"
+      register: restore_lab_http_report
+      changed_when: false
+
+    - name: Show restore-lab HTTP/API consistency report
+      ansible.builtin.debug:
+        var: restore_lab_http_report.stdout_lines
