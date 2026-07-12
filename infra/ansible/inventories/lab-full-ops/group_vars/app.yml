@@ -16,6 +16,8 @@ lab_full_ops_app_nfs_source: "{{ lab_full_ops_app_nfs_server_host }}:{{ lab_full
 lab_full_ops_app_nfs_fstype: nfs
 lab_full_ops_app_nfs_mount_options: rw,sync,hard,intr,_netdev
 
+# These values apply only to the local mount directory before the NFS export is
+# mounted. Once mounted, owner/mode are controlled by the nfs-01 export root.
 lab_full_ops_app_nfs_mount_owner: root
 lab_full_ops_app_nfs_mount_group: root
 lab_full_ops_app_nfs_mount_mode: "0755"
@@ -48,6 +50,12 @@ ops_app_node_tier: private-was
 # manually and placed there when Maven is not installed locally.
 ops_app_jar_url: ""
 ops_app_jar_source_path: ""
+
+# Prevent deploying an older artifact that still has the basic work-order API
+# but lacks the storage evidence endpoints required by lab-full-ops validation.
+ops_app_required_jar_entries:
+  - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderEvidenceController.class
+  - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderEvidenceRepository.class
 
 # DB connection used by ops-sample-service.
 # db-primary-01 is defined in the lab-full-ops inventory.
