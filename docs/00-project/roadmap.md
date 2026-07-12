@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap separates completed validation work from optional future expansion work.
+This roadmap separates completed validation work from service-completion work and optional future expansion.
 
 The fixed project theme is:
 
@@ -26,12 +26,12 @@ Phase 4A. observability logs/service/request-path evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
-Phase 5. portfolio packaging and explanation: current focus
+Phase 5. ops-sample-service completion: current focus
 ```
 
 ## Phase 4 freeze decision
 
-Phase 4 is complete enough for the portfolio objective.
+Phase 4 observability expansion is complete enough for the portfolio objective.
 
 Do not continue expanding this project into:
 
@@ -46,7 +46,7 @@ AWS managed architecture replacement
 SLO/SLA compliance work
 ```
 
-The next work should be portfolio packaging, not another observability feature.
+The next work should be service completion, not another observability feature.
 
 ## Completed operating evidence
 
@@ -281,26 +281,38 @@ Key evidence:
 docs/04-evidence/observability-alert-validation-2026-07-12.md
 ```
 
-## Current focus: portfolio packaging
+## Current focus: Phase 5 service completion
 
 The next work should not create AWS resources by default.
 
 Current focus:
 
 ```text
-README clarity
-evidence index
-portfolio-facing summary
-interview explanation
-source-of-truth cleanup
+ops-sample-service를 작업 요청·증빙 파일 관리형 경량 웹 업무 서비스로 보강
+service domain/schema
+server-rendered web UI
+status transition and event history
+evidence upload/download workflow
+operations dashboard and failure lab
+validation playbooks for enhanced workflow
+```
+
+Source-of-truth design document:
+
+```text
+docs/00-project/ops-sample-service-completion-scope.md
 ```
 
 Recommended next PR categories:
 
 ```text
-[DOCS] Improve portfolio-facing project summary
-[DOCS] Add evidence index and claim map
-[DOCS] Prepare interview explanation notes
+[APP] Add work order domain and schema
+[APP] Add basic server-rendered web UI
+[APP] Add evidence upload/download workflow
+[APP] Add status transition and event history
+[APP] Add operations dashboard and failure lab
+[ANSIBLE] Add validation for enhanced service workflow
+[VALIDATION] Refresh restore-lab evidence after service completion
 ```
 
 ## Runtime policy
@@ -309,8 +321,9 @@ Do not run Terraform apply/destroy for every small PR.
 
 ```text
 Documentation cleanup -> no AWS runtime
+Application implementation -> local/static checks first
 Ansible syntax or static prep -> no AWS runtime unless a scenario needs evidence
-New restore/incident validation -> one planned runtime window only
+Enhanced service validation -> one planned runtime window only
 Runtime window -> collect evidence -> destroy once
 ```
 
@@ -326,4 +339,7 @@ automatic failover
 SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
+completed web business service workflow
+completed evidence upload/download workflow through enhanced web pages
+service-level WEB/WAS timeout, thread, connection-pool, or slow-query validation
 ```
