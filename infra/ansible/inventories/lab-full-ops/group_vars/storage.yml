@@ -23,11 +23,21 @@ nfs_export_mode: "0777"
 nfs_export_file: /etc/exports.d/multitier-ops-platform.exports
 nfs_export_options: rw,sync,no_subtree_check,root_squash
 
-# Default lab-full-ops CIDRs from Terraform.
-# App nodes use private_app_subnet_cidr. Backup nodes use private_ops_subnet_cidr.
+# Source lab default CIDRs from the lab-full-ops Terraform profile.
+lab_full_ops_default_app_cidr: "10.50.11.0/24"
+lab_full_ops_default_backup_cidr: "10.50.41.0/24"
+
+# Restore-lab CIDRs from the restore-lab recovery Terraform profile.
+# These are selected automatically when environment_name=restore-lab.
+restore_lab_app_cidr: "10.60.11.0/24"
+restore_lab_backup_cidr: "10.60.41.0/24"
+
+nfs_export_app_cidr: "{{ restore_lab_app_cidr if environment_name | default('lab-full-ops') == 'restore-lab' else lab_full_ops_default_app_cidr }}"
+nfs_export_backup_cidr: "{{ restore_lab_backup_cidr if environment_name | default('lab-full-ops') == 'restore-lab' else lab_full_ops_default_backup_cidr }}"
+
 nfs_export_allowed_cidrs:
-  - 10.50.11.0/24
-  - 10.50.41.0/24
+  - "{{ nfs_export_app_cidr }}"
+  - "{{ nfs_export_backup_cidr }}"
 
 nfs_validation_commands:
   - exportfs -v

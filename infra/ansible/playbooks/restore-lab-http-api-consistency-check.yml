@@ -104,7 +104,7 @@
           "${base_url}/api/work-orders/{{ restore_lab_sample_work_order_id }}/evidence-files/{{ restore_lab_sample_evidence_id }}/consistency" \
           > "${consistency_json}"
 
-        summary_total=$(python3 -c "import json; data=json.load(open('${summary_json}'))['data']; print(sum(int(v) for v in data.values()))")
+        summary_total=$(python3 -c "import json; data=json.load(open('${summary_json}'))['data']; print(int(data['total']))")
         restored_evidence_count=$(python3 -c "import json; print(len(json.load(open('${list_json}'))['data']))")
         consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
         consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
