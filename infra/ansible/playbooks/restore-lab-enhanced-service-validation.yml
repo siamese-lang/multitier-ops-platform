@@ -18,11 +18,11 @@
     # Supply these from the enhanced lab-full-ops validation window or preserved evidence notes.
     # They intentionally have no production meaning; they identify the sample row/object expected
     # after pg_restore + restic restore into restore-lab.
-    enhanced_restore_work_order_id: "{{ restore_lab_enhanced_work_order_id | default(omit) }}"
-    enhanced_restore_evidence_id: "{{ restore_lab_enhanced_evidence_id | default(omit) }}"
-    enhanced_restore_storage_path: "{{ restore_lab_enhanced_storage_path | default(omit) }}"
-    enhanced_restore_expected_size_bytes: "{{ restore_lab_enhanced_expected_size_bytes | default(omit) }}"
-    enhanced_restore_expected_sha256: "{{ restore_lab_enhanced_expected_sha256 | default(omit) }}"
+    enhanced_restore_work_order_id: "{{ restore_lab_enhanced_work_order_id | default('') }}"
+    enhanced_restore_evidence_id: "{{ restore_lab_enhanced_evidence_id | default('') }}"
+    enhanced_restore_storage_path: "{{ restore_lab_enhanced_storage_path | default('') }}"
+    enhanced_restore_expected_size_bytes: "{{ restore_lab_enhanced_expected_size_bytes | default('') }}"
+    enhanced_restore_expected_sha256: "{{ restore_lab_enhanced_expected_sha256 | default('') }}"
     enhanced_restore_expected_status: "{{ restore_lab_enhanced_expected_status | default('IN_PROGRESS') }}"
     enhanced_restore_min_event_count: "{{ restore_lab_enhanced_min_event_count | default(2) }}"
     enhanced_restore_min_audit_count: "{{ restore_lab_enhanced_min_audit_count | default(1) }}"
@@ -51,11 +51,6 @@
     - name: Assert expected enhanced restore sample values are supplied
       ansible.builtin.assert:
         that:
-          - enhanced_restore_work_order_id is defined
-          - enhanced_restore_evidence_id is defined
-          - enhanced_restore_storage_path is defined
-          - enhanced_restore_expected_size_bytes is defined
-          - enhanced_restore_expected_sha256 is defined
           - enhanced_restore_work_order_id | string | length > 0
           - enhanced_restore_evidence_id | string | length > 0
           - enhanced_restore_storage_path | string | length > 0
