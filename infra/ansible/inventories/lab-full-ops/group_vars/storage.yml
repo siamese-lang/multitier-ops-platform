@@ -11,9 +11,14 @@ nfs_server_package: nfs-kernel-server
 nfs_server_service: nfs-server
 
 nfs_export_root: /srv/ops-sample/files
-nfs_export_owner: root
-nfs_export_group: root
-nfs_export_mode: "0775"
+
+# Keep root_squash enabled on the export. During the runtime validation, app-side
+# writes are performed through the NFS mount and root is mapped to the anonymous
+# identity. The export root therefore has to be writable by the squashed identity;
+# otherwise the mount succeeds but the application cannot create evidence files.
+nfs_export_owner: nobody
+nfs_export_group: nogroup
+nfs_export_mode: "0777"
 
 nfs_export_file: /etc/exports.d/multitier-ops-platform.exports
 nfs_export_options: rw,sync,no_subtree_check,root_squash
