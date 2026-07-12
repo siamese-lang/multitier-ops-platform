@@ -181,7 +181,7 @@ Future runtime command from WSL:
 ansible lab_full_ops_free_tier \
   -i inventories/lab-full-ops/hosts.yml \
   -b \
-  -a 'set -o pipefail; date -Is; hostname; uptime; free -m; df -h; df -i; ss -lntp' \
+  -a 'date -Is; hostname; uptime; free -m; df -h; df -i; ss -lntp' \
   | tee "$EVIDENCE_DIR/node-baseline-all-targets.txt"
 ```
 
