@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Failure Lab - ops-sample-service</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2933; }
+    a { color: #165dba; text-decoration: none; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; }
+    th, td { border-bottom: 1px solid #d9e2ec; padding: 0.65rem; text-align: left; vertical-align: top; }
+    th { background: #f0f4f8; }
+    code { background: #f0f4f8; padding: 0.15rem 0.3rem; border-radius: 0.25rem; }
+    pre { background: #102a43; color: #f0f4f8; padding: 1rem; border-radius: 0.5rem; overflow: auto; }
+    .card { border: 1px solid #d9e2ec; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; background: #ffffff; }
+    .muted { color: #64748b; font-size: 0.9rem; }
+    .pill { display: inline-block; border: 1px solid #bcccdc; border-radius: 999px; padding: 0.25rem 0.55rem; background: #f8fafc; margin-right: 0.25rem; }
+  </style>
+</head>
+<body>
+<p><a href="/work-orders">← 작업 요청 목록</a></p>
+
+<header>
+  <h1>WEB/WAS Failure Lab</h1>
+  <p class="muted">Nginx timeout, WAS thread 점유, DB dependency latency, 파일 저장소 상태를 관찰하기 위한 운영 검증용 경로입니다.</p>
+</header>
+
+<section class="card">
+  <h2>현재 노드와 저장소</h2>
+  <p>
+    <span class="pill">node <strong th:text="${node.hostname}">hostname</strong></span>
+    <span class="pill">env <strong th:text="${node.environment}">env</strong></span>
+    <span class="pill">version <strong th:text="${node.version}">version</strong></span>
+  </p>
+  <table>
+    <tbody>
+    <tr><th>Storage root</th><td th:text="${storageRoot}">/mnt/ops-sample/files</td></tr>
+    <tr><th>Exists</th><td th:text="${storage.exists}">true</td></tr>
+    <tr><th>Directory</th><td th:text="${storage.directory}">true</td></tr>
+    <tr><th>Readable</th><td th:text="${storage.readable}">true</td></tr>
+    <tr><th>Writable</th><td th:text="${storage.writable}">true</td></tr>
+    <tr><th>Ready</th><td th:text="${storage.ready}">true</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Failure-lab endpoints</h2>
+  <table>
+    <thead>
+    <tr>
+      <th>Endpoint</th>
+      <th>운영 의미</th>
+      <th>예상 관찰 지점</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td><a href="/api/failure-lab/sleep?millis=3000"><code>/api/failure-lab/sleep?millis=3000</code></a></td>
+      <td>WAS thread를 일정 시간 점유하는 긴 요청</td>
+      <td>Nginx upstream response time, app request duration, 동시 요청 시 thread saturation</td>
+    </tr>
+    <tr>
+      <td><a href="/api/failure-lab/db-sleep?millis=3000"><code>/api/failure-lab/db-sleep?millis=3000</code></a></td>
+      <td>PostgreSQL <code>pg_sleep</code> 기반 DB dependency 지연</td>
+      <td>DB dependency latency, readiness와 DB-backed endpoint 차이, connection wait 관찰</td>
+    </tr>
+    <tr>
+      <td><a href="/api/failure-lab/file-storage-check"><code>/api/failure-lab/file-storage-check</code></a></td>
+      <td>NFS/app file storage mount 상태 확인</td>
+      <td>파일 저장소 장애, 권한 문제, 업로드 실패 원인 분리</td>
+    </tr>
+    <tr>
+      <td><a href="/api/failure-lab/upload-limits"><code>/api/failure-lab/upload-limits</code></a></td>
+      <td>WAS multipart upload 제한 확인</td>
+      <td>Nginx <code>client_max_body_size</code>와 WAS multipart limit 비교</td>
+    </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>CLI examples</h2>
+  <pre>curl -i -H 'X-Request-Id: was-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/sleep?millis=3000'
+curl -i -H 'X-Request-Id: db-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-sleep?millis=3000'
+curl -i -H 'X-Request-Id: file-storage-check-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/file-storage-check'
+curl -i -H 'X-Request-Id: upload-limits-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/upload-limits'</pre>
+</section>
+
+<section class="card">
+  <h2>Guardrail</h2>
+  <p class="muted">이 화면은 운영 검증용입니다. 상용 장애 주입 플랫폼이나 부하 테스트 도구가 아니라, WEB/WAS/DB/File 계층의 관찰 지점을 명확히 만들기 위한 최소 failure-lab입니다.</p>
+</section>
+
+<footer class="muted">
+  defaultSleepMs: <span th:text="${defaultSleepMs}">1000</span> / maxSleepMs: <span th:text="${maxSleepMs}">30000</span>
+</footer>
+</body>
+</html>

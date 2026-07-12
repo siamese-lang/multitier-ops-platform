@@ -161,6 +161,8 @@
         <li><a th:href="@{/api/work-orders/{id}(id=${workOrder.id})}">Work order JSON</a></li>
         <li><a th:href="@{/api/work-orders/{id}/events(id=${workOrder.id})}">Events JSON</a></li>
         <li><a href="/api/audit-logs?limit=10">Audit logs JSON</a></li>
+        <li><a href="/ops/failure-lab">WEB/WAS failure lab</a></li>
+        <li><a href="/api/failure-lab/file-storage-check">File storage check</a></li>
         <li><a href="/readyz">Readiness</a></li>
         <li><a href="/node">Node identity</a></li>
       </ul>
