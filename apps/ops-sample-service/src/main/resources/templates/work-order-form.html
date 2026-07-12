@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New Work Order - ops-sample-service</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2933; }
+    a { color: #165dba; text-decoration: none; }
+    .card { max-width: 760px; border: 1px solid #d9e2ec; border-radius: 0.5rem; padding: 1rem; background: #ffffff; }
+    label { display: block; font-weight: 600; margin-top: 1rem; }
+    input, select, textarea { box-sizing: border-box; width: 100%; padding: 0.55rem; margin-top: 0.25rem; border: 1px solid #bcccdc; border-radius: 0.375rem; }
+    textarea { min-height: 8rem; }
+    button, .button { display: inline-block; padding: 0.55rem 0.8rem; border: 0; border-radius: 0.375rem; background: #165dba; color: #fff; margin-top: 1rem; cursor: pointer; }
+    .secondary { background: #52606d; }
+    .error { padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; background: #fff1f2; border: 1px solid #fecdd3; color: #9f1239; }
+    .muted { color: #64748b; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>새 작업 요청</h1>
+  <p class="muted">운영 이슈, 장애 조치, 복구 검증을 추적하기 위한 작업 요청을 등록합니다.</p>
+</header>
+
+<div class="error" th:if="${error}" th:text="${error}">error</div>
+
+<section class="card">
+  <form method="post" action="/work-orders">
+    <label for="title">제목</label>
+    <input id="title" name="title" required maxlength="200" th:value="${title}" placeholder="예: Investigate upload timeout through nginx-01">
+
+    <label for="priority">우선순위</label>
+    <select id="priority" name="priority">
+      <option th:each="option : ${priorityOptions}" th:value="${option}" th:text="${option}" th:selected="${option == priority}">NORMAL</option>
+    </select>
+
+    <label for="requester">요청자</label>
+    <input id="requester" name="requester" th:value="${requester}" placeholder="service-desk">
+
+    <label for="assignee">담당자</label>
+    <input id="assignee" name="assignee" th:value="${assignee}" placeholder="ops-admin">
+
+    <label for="description">설명</label>
+    <textarea id="description" name="description" th:text="${description}" placeholder="장애 증상, 영향 범위, 확인할 계층을 작성합니다."></textarea>
+
+    <button type="submit">등록</button>
+    <a class="button secondary" href="/work-orders">목록으로</a>
+  </form>
+</section>
+</body>
+</html>
