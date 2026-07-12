@@ -331,7 +331,8 @@
       changed_when: false
 
     - name: Read upload incident Nginx error log evidence
-      ansible.builtin.shell: "grep '{{ upload_incident_request_prefix }}\|client intended to send too large body' /var/log/nginx/ops_error.log | tail -n 50 || true"
+      ansible.builtin.shell: |
+        grep '{{ upload_incident_request_prefix }}\|client intended to send too large body' /var/log/nginx/ops_error.log | tail -n 50 || true
       register: upload_incident_nginx_error_log
       changed_when: false
 
