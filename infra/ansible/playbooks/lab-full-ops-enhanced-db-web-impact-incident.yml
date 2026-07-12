@@ -1,0 +1,475 @@
+---
+- name: Validate enhanced DB service incident impact on web workflow
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    db_web_impact_request_prefix: lab-full-ops-db-web-impact
+    db_web_impact_report_dir: /tmp/multitier-ops-platform
+    db_web_impact_result_dir: "{{ db_web_impact_report_dir }}/lab-full-ops-db-web-impact"
+    db_web_impact_report_file: "{{ db_web_impact_report_dir }}/lab-full-ops-db-web-impact-{{ inventory_hostname }}.txt"
+    db_web_impact_base_url: https://127.0.0.1
+    db_web_impact_db_host: db-primary-01
+    db_web_impact_app_log_host: "{{ groups['app'][0] | default('app-01') }}"
+    db_web_impact_postgresql_service_name: postgresql
+    db_web_impact_app_service_name: ops-sample-service
+    db_web_impact_db_port: 5432
+    db_web_impact_node_exporter_port: 9100
+
+  pre_tasks:
+    - name: Assert dependent hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - db_web_impact_db_host in groups['db']
+          - groups['app'] is defined
+          - db_web_impact_app_log_host in groups['app']
+        fail_msg: "db-primary-01 and at least one app host must exist before DB web-impact validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this DB web-impact validation from nginx-01 through the web inventory group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook stops PostgreSQL temporarily to validate DB dependency impact on enhanced web workflow."
+          - "It must run only during one planned lab-full-ops runtime validation window."
+          - "The always block restarts PostgreSQL before the play exits."
+          - "Do not run Terraform apply/destroy just for this playbook alone."
+
+  tasks:
+    - name: Ensure DB web-impact validation result directory exists
+      ansible.builtin.file:
+        path: "{{ db_web_impact_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Capture baseline web/API behavior before DB incident
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ db_web_impact_result_dir }}"
+        base_url="{{ db_web_impact_base_url }}"
+        request_prefix="{{ db_web_impact_request_prefix }}"
+        baseline_tsv="${result_dir}/baseline-probes.tsv"
+        baseline_work_orders_html="${result_dir}/baseline-work-orders.html"
+        baseline_summary_json="${result_dir}/baseline-summary.json"
+        parsed_kv="${result_dir}/baseline-parsed.env"
+        : > "${baseline_tsv}"
+
+        run_probe() {
+          local request_id="$1"
+          local endpoint="$2"
+          local url="$3"
+          local output_file="$4"
+          local http_code
+          local time_total
+          set +e
+          read -r http_code time_total < <(
+            curl -k -sS -o "${output_file}" \
+              -w '%{http_code} %{time_total}' \
+              -H "X-Request-Id: ${request_id}" \
+              "${url}"
+          )
+          local curl_rc=$?
+          set -e
+          if [[ -z "${http_code:-}" ]]; then
+            http_code="000"
+          fi
+          if [[ -z "${time_total:-}" ]]; then
+            time_total="n/a"
+          fi
+          printf '%s\t%s\t%s\t%s\t%s\n' "${request_id}" "${endpoint}" "${http_code}" "${time_total}" "${curl_rc}" >> "${baseline_tsv}"
+        }
+
+        run_probe "${request_prefix}-baseline-healthz" "healthz" "${base_url}/healthz" "${result_dir}/baseline-healthz.out"
+        run_probe "${request_prefix}-baseline-readyz" "readyz" "${base_url}/readyz" "${result_dir}/baseline-readyz.out"
+        run_probe "${request_prefix}-baseline-work-orders" "work_orders" "${base_url}/work-orders" "${baseline_work_orders_html}"
+        run_probe "${request_prefix}-baseline-summary" "summary" "${base_url}/api/work-orders/summary" "${baseline_summary_json}"
+
+        baseline_health_code=$(awk -F '\t' '$2=="healthz" {print $3}' "${baseline_tsv}")
+        baseline_ready_code=$(awk -F '\t' '$2=="readyz" {print $3}' "${baseline_tsv}")
+        baseline_work_orders_code=$(awk -F '\t' '$2=="work_orders" {print $3}' "${baseline_tsv}")
+        baseline_summary_code=$(awk -F '\t' '$2=="summary" {print $3}' "${baseline_tsv}")
+        baseline_work_orders_has_title=$(grep -q '운영 작업 요청' "${baseline_work_orders_html}" && echo true || echo false)
+        baseline_summary_status=$(python3 -c "import json; print(json.load(open('${baseline_summary_json}'))['status'])")
+
+        test "${baseline_health_code}" = "200"
+        test "${baseline_ready_code}" = "200"
+        test "${baseline_work_orders_code}" = "200"
+        test "${baseline_summary_code}" = "200"
+        test "${baseline_work_orders_has_title}" = "true"
+        test "${baseline_summary_status}" = "ok"
+
+        cat > "${parsed_kv}" <<EOF
+        baseline_health_code=${baseline_health_code}
+        baseline_ready_code=${baseline_ready_code}
+        baseline_work_orders_code=${baseline_work_orders_code}
+        baseline_summary_code=${baseline_summary_code}
+        baseline_work_orders_has_title=${baseline_work_orders_has_title}
+        baseline_summary_status=${baseline_summary_status}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: db_web_impact_baseline
+      changed_when: false
+
+    - name: Capture baseline PostgreSQL service and port state
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "postgresql_service_state=$(systemctl is-active {{ db_web_impact_postgresql_service_name }} || true)"
+        echo "postgresql_port_listening=$(ss -ltnp 2>/dev/null | grep -q ':{{ db_web_impact_db_port }} ' && echo true || echo false)"
+        echo "node_exporter_postgresql_metrics_start"
+        curl -fsS "http://127.0.0.1:{{ db_web_impact_node_exporter_port }}/metrics" 2>/dev/null \
+          | grep 'node_systemd_unit_state.*postgresql.service' || true
+        echo "node_exporter_postgresql_metrics_end"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ db_web_impact_db_host }}"
+      register: db_web_impact_db_baseline
+      changed_when: false
+
+    - name: Run DB service incident web-impact block
+      block:
+        - name: Stop PostgreSQL on DB primary for incident validation
+          ansible.builtin.service:
+            name: "{{ db_web_impact_postgresql_service_name }}"
+            state: stopped
+          delegate_to: "{{ db_web_impact_db_host }}"
+
+        - name: Confirm PostgreSQL service and port are down
+          ansible.builtin.shell: |
+            set -euo pipefail
+            state=$(systemctl is-active {{ db_web_impact_postgresql_service_name }} || true)
+            port_listening=$(ss -ltnp 2>/dev/null | grep -q ':{{ db_web_impact_db_port }} ' && echo true || echo false)
+            echo "postgresql_service_state=${state}"
+            echo "postgresql_port_listening=${port_listening}"
+            if [[ "${state}" = "active" || "${port_listening}" = "true" ]]; then
+              exit 1
+            fi
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ db_web_impact_db_host }}"
+          register: db_web_impact_db_incident_state
+          changed_when: false
+
+        - name: Confirm app service remains active while DB is unavailable
+          ansible.builtin.command: "systemctl is-active {{ db_web_impact_app_service_name }}"
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['app'] }}"
+          register: db_web_impact_app_incident_states
+          changed_when: false
+
+        - name: Allow application DB dependency checks to observe PostgreSQL outage
+          ansible.builtin.pause:
+            seconds: 3
+
+        - name: Probe enhanced web/API behavior during DB incident
+          ansible.builtin.shell: |
+            set -euo pipefail
+
+            result_dir="{{ db_web_impact_result_dir }}"
+            base_url="{{ db_web_impact_base_url }}"
+            request_prefix="{{ db_web_impact_request_prefix }}"
+            incident_tsv="${result_dir}/incident-probes.tsv"
+            incident_work_orders_html="${result_dir}/incident-work-orders.html"
+            incident_summary_body="${result_dir}/incident-summary.json"
+            incident_ready_body="${result_dir}/incident-readyz.json"
+            parsed_kv="${result_dir}/incident-parsed.env"
+            : > "${incident_tsv}"
+
+            run_probe() {
+              local request_id="$1"
+              local endpoint="$2"
+              local url="$3"
+              local output_file="$4"
+              local http_code
+              local time_total
+              set +e
+              read -r http_code time_total < <(
+                curl -k -sS -o "${output_file}" \
+                  -w '%{http_code} %{time_total}' \
+                  -H "X-Request-Id: ${request_id}" \
+                  "${url}"
+              )
+              local curl_rc=$?
+              set -e
+              if [[ -z "${http_code:-}" ]]; then
+                http_code="000"
+              fi
+              if [[ -z "${time_total:-}" ]]; then
+                time_total="n/a"
+              fi
+              printf '%s\t%s\t%s\t%s\t%s\n' "${request_id}" "${endpoint}" "${http_code}" "${time_total}" "${curl_rc}" >> "${incident_tsv}"
+            }
+
+            run_probe "${request_prefix}-incident-healthz" "healthz" "${base_url}/healthz" "${result_dir}/incident-healthz.out"
+            run_probe "${request_prefix}-incident-readyz" "readyz" "${base_url}/readyz" "${incident_ready_body}"
+            run_probe "${request_prefix}-incident-work-orders" "work_orders" "${base_url}/work-orders" "${incident_work_orders_html}"
+            run_probe "${request_prefix}-incident-summary" "summary" "${base_url}/api/work-orders/summary" "${incident_summary_body}"
+
+            incident_health_code=$(awk -F '\t' '$2=="healthz" {print $3}' "${incident_tsv}")
+            incident_ready_code=$(awk -F '\t' '$2=="readyz" {print $3}' "${incident_tsv}")
+            incident_work_orders_code=$(awk -F '\t' '$2=="work_orders" {print $3}' "${incident_tsv}")
+            incident_summary_code=$(awk -F '\t' '$2=="summary" {print $3}' "${incident_tsv}")
+            incident_work_orders_error_marker=$(grep -q 'DB-backed work-order view is unavailable' "${incident_work_orders_html}" && echo true || echo false)
+            incident_work_orders_empty_marker=$(grep -q '표시할 작업 요청이 없습니다' "${incident_work_orders_html}" && echo true || echo false)
+            incident_ready_status=$(python3 -c "import json,sys; print(json.load(open('${incident_ready_body}')).get('status','n/a'))" 2>/dev/null || echo n/a)
+            incident_summary_status=$(python3 -c "import json,sys; print(json.load(open('${incident_summary_body}')).get('status','n/a'))" 2>/dev/null || echo n/a)
+
+            test "${incident_health_code}" = "200"
+            test "${incident_ready_code}" = "503"
+            test "${incident_summary_code}" = "503"
+            test "${incident_work_orders_error_marker}" = "true"
+
+            cat > "${parsed_kv}" <<EOF
+            incident_health_code=${incident_health_code}
+            incident_ready_code=${incident_ready_code}
+            incident_work_orders_code=${incident_work_orders_code}
+            incident_summary_code=${incident_summary_code}
+            incident_work_orders_error_marker=${incident_work_orders_error_marker}
+            incident_work_orders_empty_marker=${incident_work_orders_empty_marker}
+            incident_ready_status=${incident_ready_status}
+            incident_summary_status=${incident_summary_status}
+            incident_tsv=${incident_tsv}
+            EOF
+
+            cat "${parsed_kv}"
+          args:
+            executable: /bin/bash
+          register: db_web_impact_incident
+          changed_when: false
+
+        - name: Capture DB node service metrics during incident if node exporter is available
+          ansible.builtin.shell: |
+            set -euo pipefail
+            echo "postgresql_service_state=$(systemctl is-active {{ db_web_impact_postgresql_service_name }} || true)"
+            echo "postgresql_port_listening=$(ss -ltnp 2>/dev/null | grep -q ':{{ db_web_impact_db_port }} ' && echo true || echo false)"
+            echo "node_exporter_postgresql_metrics_start"
+            curl -fsS "http://127.0.0.1:{{ db_web_impact_node_exporter_port }}/metrics" 2>/dev/null \
+              | grep 'node_systemd_unit_state.*postgresql.service' || true
+            echo "node_exporter_postgresql_metrics_end"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ db_web_impact_db_host }}"
+          register: db_web_impact_db_incident_metrics
+          changed_when: false
+          failed_when: false
+
+        - name: Read DB incident Nginx access log evidence
+          ansible.builtin.shell: "grep '{{ db_web_impact_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 50 || true"
+          register: db_web_impact_nginx_access_log
+          changed_when: false
+
+        - name: Read DB incident Nginx error log evidence
+          ansible.builtin.shell: "grep '{{ db_web_impact_request_prefix }}' /var/log/nginx/ops_error.log | tail -n 50 || true"
+          register: db_web_impact_nginx_error_log
+          changed_when: false
+
+        - name: Read DB incident app journald request-id evidence
+          ansible.builtin.shell: "journalctl -u {{ db_web_impact_app_service_name }} --no-pager --since '-30 min' | grep '{{ db_web_impact_request_prefix }}' | tail -n 80 || true"
+          delegate_to: "{{ db_web_impact_app_log_host }}"
+          register: db_web_impact_app_log
+          changed_when: false
+
+      always:
+        - name: Restart PostgreSQL after DB web-impact validation
+          ansible.builtin.service:
+            name: "{{ db_web_impact_postgresql_service_name }}"
+            state: started
+          delegate_to: "{{ db_web_impact_db_host }}"
+
+        - name: Wait for PostgreSQL port after restart
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[db_web_impact_db_host].ansible_host | default(db_web_impact_db_host) }}"
+            port: "{{ db_web_impact_db_port }}"
+            timeout: 60
+          delegate_to: "{{ db_web_impact_db_host }}"
+
+    - name: Probe enhanced web/API behavior after DB recovery
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ db_web_impact_result_dir }}"
+        base_url="{{ db_web_impact_base_url }}"
+        request_prefix="{{ db_web_impact_request_prefix }}"
+        recovery_tsv="${result_dir}/recovery-probes.tsv"
+        recovery_work_orders_html="${result_dir}/recovery-work-orders.html"
+        recovery_summary_json="${result_dir}/recovery-summary.json"
+        parsed_kv="${result_dir}/recovery-parsed.env"
+        : > "${recovery_tsv}"
+
+        run_probe() {
+          local request_id="$1"
+          local endpoint="$2"
+          local url="$3"
+          local output_file="$4"
+          local http_code
+          local time_total
+          set +e
+          read -r http_code time_total < <(
+            curl -k -sS -o "${output_file}" \
+              -w '%{http_code} %{time_total}' \
+              -H "X-Request-Id: ${request_id}" \
+              "${url}"
+          )
+          local curl_rc=$?
+          set -e
+          if [[ -z "${http_code:-}" ]]; then
+            http_code="000"
+          fi
+          if [[ -z "${time_total:-}" ]]; then
+            time_total="n/a"
+          fi
+          printf '%s\t%s\t%s\t%s\t%s\n' "${request_id}" "${endpoint}" "${http_code}" "${time_total}" "${curl_rc}" >> "${recovery_tsv}"
+        }
+
+        for i in $(seq 1 20); do
+          run_probe "${request_prefix}-recovery-readyz-${i}" "readyz" "${base_url}/readyz" "${result_dir}/recovery-readyz.out"
+          recovery_ready_code=$(awk -F '\t' '$2=="readyz" {code=$3} END {print code}' "${recovery_tsv}")
+          if [[ "${recovery_ready_code}" = "200" ]]; then
+            break
+          fi
+          sleep 3
+        done
+
+        run_probe "${request_prefix}-recovery-healthz" "healthz" "${base_url}/healthz" "${result_dir}/recovery-healthz.out"
+        run_probe "${request_prefix}-recovery-work-orders" "work_orders" "${base_url}/work-orders" "${recovery_work_orders_html}"
+        run_probe "${request_prefix}-recovery-summary" "summary" "${base_url}/api/work-orders/summary" "${recovery_summary_json}"
+
+        recovery_health_code=$(awk -F '\t' '$2=="healthz" {print $3}' "${recovery_tsv}" | tail -n 1)
+        recovery_ready_code=$(awk -F '\t' '$2=="readyz" {code=$3} END {print code}' "${recovery_tsv}")
+        recovery_work_orders_code=$(awk -F '\t' '$2=="work_orders" {print $3}' "${recovery_tsv}")
+        recovery_summary_code=$(awk -F '\t' '$2=="summary" {print $3}' "${recovery_tsv}")
+        recovery_work_orders_has_title=$(grep -q '운영 작업 요청' "${recovery_work_orders_html}" && echo true || echo false)
+        recovery_summary_status=$(python3 -c "import json; print(json.load(open('${recovery_summary_json}'))['status'])")
+
+        test "${recovery_health_code}" = "200"
+        test "${recovery_ready_code}" = "200"
+        test "${recovery_work_orders_code}" = "200"
+        test "${recovery_summary_code}" = "200"
+        test "${recovery_work_orders_has_title}" = "true"
+        test "${recovery_summary_status}" = "ok"
+
+        cat > "${parsed_kv}" <<EOF
+        recovery_health_code=${recovery_health_code}
+        recovery_ready_code=${recovery_ready_code}
+        recovery_work_orders_code=${recovery_work_orders_code}
+        recovery_summary_code=${recovery_summary_code}
+        recovery_work_orders_has_title=${recovery_work_orders_has_title}
+        recovery_summary_status=${recovery_summary_status}
+        recovery_tsv=${recovery_tsv}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: db_web_impact_recovery
+      changed_when: false
+
+    - name: Capture PostgreSQL service and port state after recovery
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "postgresql_service_state=$(systemctl is-active {{ db_web_impact_postgresql_service_name }} || true)"
+        echo "postgresql_port_listening=$(ss -ltnp 2>/dev/null | grep -q ':{{ db_web_impact_db_port }} ' && echo true || echo false)"
+        echo "node_exporter_postgresql_metrics_start"
+        curl -fsS "http://127.0.0.1:{{ db_web_impact_node_exporter_port }}/metrics" 2>/dev/null \
+          | grep 'node_systemd_unit_state.*postgresql.service' || true
+        echo "node_exporter_postgresql_metrics_end"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ db_web_impact_db_host }}"
+      register: db_web_impact_db_recovery
+      changed_when: false
+
+    - name: Extract DB web-impact values
+      ansible.builtin.set_fact:
+        db_web_baseline_health_code: "{{ db_web_impact_baseline.stdout | regex_search('baseline_health_code=([^\n]+)', '\\1') | first }}"
+        db_web_baseline_ready_code: "{{ db_web_impact_baseline.stdout | regex_search('baseline_ready_code=([^\n]+)', '\\1') | first }}"
+        db_web_baseline_work_orders_code: "{{ db_web_impact_baseline.stdout | regex_search('baseline_work_orders_code=([^\n]+)', '\\1') | first }}"
+        db_web_baseline_summary_code: "{{ db_web_impact_baseline.stdout | regex_search('baseline_summary_code=([^\n]+)', '\\1') | first }}"
+        db_web_incident_health_code: "{{ db_web_impact_incident.stdout | regex_search('incident_health_code=([^\n]+)', '\\1') | first }}"
+        db_web_incident_ready_code: "{{ db_web_impact_incident.stdout | regex_search('incident_ready_code=([^\n]+)', '\\1') | first }}"
+        db_web_incident_work_orders_code: "{{ db_web_impact_incident.stdout | regex_search('incident_work_orders_code=([^\n]+)', '\\1') | first }}"
+        db_web_incident_summary_code: "{{ db_web_impact_incident.stdout | regex_search('incident_summary_code=([^\n]+)', '\\1') | first }}"
+        db_web_incident_work_orders_error_marker: "{{ db_web_impact_incident.stdout | regex_search('incident_work_orders_error_marker=([^\n]+)', '\\1') | first }}"
+        db_web_recovery_ready_code: "{{ db_web_impact_recovery.stdout | regex_search('recovery_ready_code=([^\n]+)', '\\1') | first }}"
+        db_web_recovery_work_orders_code: "{{ db_web_impact_recovery.stdout | regex_search('recovery_work_orders_code=([^\n]+)', '\\1') | first }}"
+        db_web_recovery_summary_code: "{{ db_web_impact_recovery.stdout | regex_search('recovery_summary_code=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert DB web-impact incident classification
+      ansible.builtin.assert:
+        that:
+          - db_web_baseline_health_code == '200'
+          - db_web_baseline_ready_code == '200'
+          - db_web_baseline_work_orders_code == '200'
+          - db_web_baseline_summary_code == '200'
+          - db_web_incident_health_code == '200'
+          - db_web_incident_ready_code == '503'
+          - db_web_incident_summary_code == '503'
+          - db_web_incident_work_orders_error_marker == 'true'
+          - db_web_recovery_ready_code == '200'
+          - db_web_recovery_work_orders_code == '200'
+          - db_web_recovery_summary_code == '200'
+        fail_msg: "DB web-impact incident evidence did not match expected health/ready/work-orders/summary pattern. Check {{ db_web_impact_result_dir }} on nginx-01."
+
+    - name: Write DB web-impact validation report
+      ansible.builtin.copy:
+        dest: "{{ db_web_impact_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          validation=enhanced-db-web-impact-incident
+          request_prefix={{ db_web_impact_request_prefix }}
+          base_url={{ db_web_impact_base_url }}
+          db_host={{ db_web_impact_db_host }}
+          postgresql_service_name={{ db_web_impact_postgresql_service_name }}
+          baseline_health_code={{ db_web_baseline_health_code }}
+          baseline_ready_code={{ db_web_baseline_ready_code }}
+          baseline_work_orders_code={{ db_web_baseline_work_orders_code }}
+          baseline_summary_code={{ db_web_baseline_summary_code }}
+          incident_health_code={{ db_web_incident_health_code }}
+          incident_ready_code={{ db_web_incident_ready_code }}
+          incident_work_orders_code={{ db_web_incident_work_orders_code }}
+          incident_summary_code={{ db_web_incident_summary_code }}
+          incident_work_orders_error_marker={{ db_web_incident_work_orders_error_marker }}
+          recovery_ready_code={{ db_web_recovery_ready_code }}
+          recovery_work_orders_code={{ db_web_recovery_work_orders_code }}
+          recovery_summary_code={{ db_web_recovery_summary_code }}
+          --- db_baseline ---
+          {{ db_web_impact_db_baseline.stdout | default('n/a') }}
+          --- db_incident_state ---
+          {{ db_web_impact_db_incident_state.stdout | default('n/a') }}
+          --- db_incident_metrics ---
+          {{ db_web_impact_db_incident_metrics.stdout | default('n/a') }}
+          --- db_recovery ---
+          {{ db_web_impact_db_recovery.stdout | default('n/a') }}
+          --- app_incident_states ---
+          {{ db_web_impact_app_incident_states.results | default('n/a') }}
+          --- nginx_access_log_sample ---
+          {{ db_web_impact_nginx_access_log.stdout | default('n/a') }}
+          --- nginx_error_log_sample ---
+          {{ db_web_impact_nginx_error_log.stdout | default('n/a') }}
+          --- app_log_host ---
+          {{ db_web_impact_app_log_host }}
+          --- app_log_sample ---
+          {{ db_web_impact_app_log.stdout | default('n/a') }}
+          result_dir={{ db_web_impact_result_dir }}
+
+    - name: Display DB web-impact validation report
+      ansible.builtin.command: "cat {{ db_web_impact_report_file }}"
+      register: db_web_impact_report
+      changed_when: false
+
+    - name: Show DB web-impact validation report
+      ansible.builtin.debug:
+        var: db_web_impact_report.stdout_lines
