@@ -25,7 +25,7 @@ Kubernetes/EKS/GitOps project
 Grafana dashboard-first project
 ```
 
-## Repository and local paths
+## Repository
 
 ```text
 repo: siamese-lang/multitier-ops-platform
@@ -57,25 +57,32 @@ docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md
 
 Completed.
 
-Validated:
+Purpose:
 
 ```text
-Temporary EC2 lab lifecycle
-bastion/Ansible control path
-private node NAT egress
-workload start and health check
-basic evidence collection
-Terraform destroy
+Verify temporary EC2 lab lifecycle, bastion/Ansible control path, private node NAT egress, workload start, health check, evidence collection, and destroy.
 ```
 
 ### Phase 1. lab-full-min WEB/WAS/DB
 
 Completed.
 
-Validated operating path:
+Validated topology:
 
 ```text
 operator -> nginx-01:443 -> app-01/app-02:8080 -> db-primary-01:5432
+```
+
+Completed components:
+
+```text
+Terraform lab-full-min baseline
+Ansible lab-full-min inventory/control path
+PostgreSQL primary playbook
+ops-sample-service systemd deployment
+Nginx HTTPS reverse proxy
+GitHub Actions jar artifact workflow
+Nginx HTTPS ingress
 ```
 
 Completed validations:
@@ -93,12 +100,24 @@ Terraform cleanup after validation
 
 Completed.
 
-Validated reduced runtime path:
+Validated reduced runtime topology:
 
 ```text
 operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
                                  |
                                  -> nfs-01:/srv/ops-sample/files
+```
+
+Runtime nodes used:
+
+```text
+bastion-01
+nginx-01
+app-01
+db-primary-01
+nfs-01
+backup-01
+NAT Gateway enabled only for the batched validation window
 ```
 
 Validated scenarios:
@@ -120,13 +139,28 @@ Nginx request-id access log verification
 Terraform destroy after evidence collection
 ```
 
-Key fixed runtime findings:
+Runtime findings and follow-up fixes:
 
 ```text
-NFS root_squash export-root permission mismatch
-app NFS mount idempotency failure on already-mounted NFS root
-stale app jar artifact missing WorkOrderEvidence classes
-systemd unit description and evidence root write-path mismatch
+1. NFS write failed because export root was root:root 0775 under root_squash.
+   Follow-up fixed storage defaults to nobody:nogroup 0777 for the lab export root.
+
+2. Re-running app NFS mount failed because the playbook tried to chown an already-mounted NFS root from the app node.
+   Follow-up made the mount playbook skip local ownership enforcement once the NFS path is mounted.
+
+3. The first evidence smoke failed at POST /api/work-orders/{id}/evidence-files with upstream 404.
+   Nginx and the basic work-order API were healthy, so the issue was isolated to a stale app artifact.
+   Follow-up added required jar entry checks for WorkOrderEvidence classes.
+
+4. The shared systemd unit still said lab-full-min and did not explicitly allow the evidence file root path.
+   Follow-up aligned the unit description and ReadWritePaths with the runtime environment/evidence root.
+```
+
+Important cleanup status:
+
+```text
+The AWS runtime validation window was completed and resources were destroyed by the operator.
+Do not recreate the lab-full-ops AWS environment just to re-check documentation or syntax-only follow-up PRs.
 ```
 
 ### Phase 2B. lab-full-ops backup artifact creation
@@ -138,18 +172,6 @@ Validated backup path:
 ```text
 backup-01 -> db-primary-01:5432                  # pg_dump opsdb
 backup-01 -> nfs-01:/srv/ops-sample/files       # NFS inventory/checksum/restic snapshot
-```
-
-Runtime topology used:
-
-```text
-bastion-01
-nginx-01
-app-01
-db-primary-01
-nfs-01
-backup-01
-NAT Gateway enabled only for the batched validation window
 ```
 
 Key backup evidence:
@@ -208,7 +230,7 @@ It supports WEB/WAS/DB plus DB/file consistency checks.
 It remains a supporting workload, not the portfolio theme.
 ```
 
-Useful capabilities:
+Current useful capabilities:
 
 ```text
 health/readiness/node endpoints
@@ -216,6 +238,13 @@ DB-backed work-order endpoints
 request ID logging
 work-order evidence file creation
 PostgreSQL metadata + NFS file object consistency endpoint
+```
+
+Future workload decision:
+
+```text
+Use whichever workload best supports operations evidence.
+If OpenKoda cannot cleanly support WEB/WAS/DB/file/backup/observability drills, keep it as Phase 0 evidence and continue with controlled workload extensions.
 ```
 
 ## What not to do next
@@ -278,6 +307,20 @@ Do not run Terraform apply/destroy for every small PR.
 Use static checks for documentation and Ansible syntax changes.
 Open an AWS runtime window only when a new restore/observability/incident scenario requires evidence.
 When NAT Gateway is enabled for package installation, collect evidence and destroy immediately.
+```
+
+## Response style for the next chat
+
+When continuing in a new conversation, ask the assistant to:
+
+```text
+Use the repository documents as the source of truth.
+Do not change the project theme.
+Prefer fewer, larger roadmap-aligned issues over many small drifting issues.
+Before implementing, check whether the work advances storage, backup/restore, observability, or incident evidence.
+Keep Terraform and Ansible as supporting tools, not the portfolio theme.
+Do not ask the user to run local Maven; use GitHub Actions artifacts or documented artifact checks.
+Do not re-open AWS runtime validation until restore/observability/incident work needs it.
 ```
 
 ## Prompt to start the next chat
