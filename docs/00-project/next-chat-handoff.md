@@ -25,7 +25,9 @@ Kubernetes/EKS/GitOps project
 Grafana dashboard-first project
 ```
 
-## Repository
+Terraform, Ansible, Spring Boot, Nginx, PostgreSQL, NFS, restic, Prometheus, Grafana, and Loki are supporting tools only. The portfolio theme is EC2-based multi-tier operations, failure diagnosis, and recovery validation.
+
+## Repository and local execution split
 
 ```text
 repo: siamese-lang/multitier-ops-platform
@@ -33,7 +35,15 @@ local Windows/Git Bash path: /c/Project/test/multitier-ops-platform
 local WSL path: /mnt/c/Project/test/multitier-ops-platform
 ```
 
-Use Git Bash for Terraform and WSL for Ansible. Do not mix those execution environments because SSH key paths, `/tmp`, and installed tools differ.
+Use the established execution split:
+
+```text
+Git Bash = Terraform only
+WSL      = Ansible, Git work, evidence organization
+AWS      = apply once -> validation -> evidence collect -> destroy once
+```
+
+Do not run Terraform from WSL in this project workflow. Do not run Ansible from Git Bash.
 
 ## Core documents to read first
 
@@ -45,15 +55,29 @@ docs/00-project/project-scope.md
 docs/00-project/roadmap.md
 docs/00-project/workload-strategy.md
 docs/00-project/next-chat-handoff.md
-docs/04-evidence/lab-full-min-web-was-db-integrated-validation.md
-docs/04-evidence/lab-full-min-continuous-operations-validation.md
+docs/01-architecture/restore-lab-recovery-validation.md
+docs/01-architecture/observability-evidence-baseline.md
+docs/03-runbooks/restore-lab-db-file-restore-baseline.md
+docs/03-runbooks/restore-lab-http-api-consistency-check.md
+docs/03-runbooks/observability-baseline.md
+docs/03-runbooks/observability-evidence-collection-baseline.md
 docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
 docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md
+docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
 ```
 
 ## Current completed state
 
-### Phase 0. lab-runtime smoke test
+```text
+Phase 0. lab-runtime smoke test: completed
+Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
+Phase 2A. lab-full-ops storage validation: completed
+Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
+Phase 3. restore-lab DB/file/API recovery validation: completed
+Phase 4. observability baseline: design and Ansible baseline prepared; runtime validation pending
+```
+
+## Phase 0. lab-runtime smoke test
 
 Completed.
 
@@ -63,7 +87,7 @@ Purpose:
 Verify temporary EC2 lab lifecycle, bastion/Ansible control path, private node NAT egress, workload start, health check, evidence collection, and destroy.
 ```
 
-### Phase 1. lab-full-min WEB/WAS/DB
+## Phase 1. lab-full-min WEB/WAS/DB
 
 Completed.
 
@@ -71,18 +95,6 @@ Validated topology:
 
 ```text
 operator -> nginx-01:443 -> app-01/app-02:8080 -> db-primary-01:5432
-```
-
-Completed components:
-
-```text
-Terraform lab-full-min baseline
-Ansible lab-full-min inventory/control path
-PostgreSQL primary playbook
-ops-sample-service systemd deployment
-Nginx HTTPS reverse proxy
-GitHub Actions jar artifact workflow
-Nginx HTTPS ingress
 ```
 
 Completed validations:
@@ -96,7 +108,7 @@ PostgreSQL failure and recovery isolation
 Terraform cleanup after validation
 ```
 
-### Phase 2A. lab-full-ops storage validation
+## Phase 2A. lab-full-ops storage validation
 
 Completed.
 
@@ -139,33 +151,18 @@ Nginx request-id access log verification
 Terraform destroy after evidence collection
 ```
 
-Runtime findings and follow-up fixes:
+Runtime findings fixed:
 
 ```text
-1. NFS write failed because export root was root:root 0775 under root_squash.
-   Follow-up fixed storage defaults to nobody:nogroup 0777 for the lab export root.
-
-2. Re-running app NFS mount failed because the playbook tried to chown an already-mounted NFS root from the app node.
-   Follow-up made the mount playbook skip local ownership enforcement once the NFS path is mounted.
-
-3. The first evidence smoke failed at POST /api/work-orders/{id}/evidence-files with upstream 404.
-   Nginx and the basic work-order API were healthy, so the issue was isolated to a stale app artifact.
-   Follow-up added required jar entry checks for WorkOrderEvidence classes.
-
-4. The shared systemd unit still said lab-full-min and did not explicitly allow the evidence file root path.
-   Follow-up aligned the unit description and ReadWritePaths with the runtime environment/evidence root.
+NFS write failed because export root was root:root 0775 under root_squash.
+App NFS mount re-run failed because the playbook tried to chown an already-mounted NFS root.
+First evidence smoke failed at POST /api/work-orders/{id}/evidence-files due to a stale app artifact.
+The shared systemd unit description and ReadWritePaths needed alignment with the ops runtime.
 ```
 
-Important cleanup status:
+## Phase 2B. lab-full-ops backup artifact creation
 
-```text
-The AWS runtime validation window was completed and resources were destroyed by the operator.
-Do not recreate the lab-full-ops AWS environment just to re-check documentation or syntax-only follow-up PRs.
-```
-
-### Phase 2B. lab-full-ops backup artifact creation
-
-Backup artifact creation evidence collected.
+Completed as backup-artifact evidence.
 
 Validated backup path:
 
@@ -184,7 +181,7 @@ nfs_file_count=2
 restic_snapshot_id=7f063aa1
 metadata_counts=ops_work_order_evidence_files 1, ops_work_orders 6
 sample_evidence_metadata includes storage_path, size, and SHA-256
-restore_status=not_validated
+restore_status=not_validated_at_backup_phase
 backup-01 PLAY RECAP unreachable=0 failed=0
 ```
 
@@ -200,17 +197,126 @@ The backup artifact archive is local evidence and is not committed to the reposi
 Important boundary:
 
 ```text
-Backup artifact creation was validated.
-Restore has not been validated yet.
-Do not claim recovery proof until restore-lab validates DB/file/API consistency from these artifacts.
+Backup artifact creation was validated in Phase 2B.
+Restore was validated later and separately in Phase 3.
+Do not treat backup creation alone as recovery proof.
 ```
 
-Cleanup status:
+## Phase 3. restore-lab DB/file/API recovery validation
+
+Completed.
+
+Restore-lab used a separate CIDR:
 
 ```text
-The operator reported Terraform destroy completed after backup artifact preservation.
-Future runtime windows should also capture terraform state list after destroy as an explicit evidence file.
+restore-lab VPC CIDR: 10.60.0.0/16
 ```
+
+Validated recovery flow:
+
+```text
+preserved backup artifact
+-> backup-01
+-> pg_restore to db-primary-01
+-> restic restore to nfs-01
+-> app-01 reads restored DB metadata and NFS file object
+-> nginx-01 reverse proxy path validates HTTP/API consistency
+```
+
+Key restore evidence:
+
+```text
+source_backup_id=lab-full-ops-backup-20260712T072623
+restore_environment=restore-lab
+pg_restore_status=validated
+restic_restore_status=validated
+actual_work_order_count=6
+actual_evidence_file_count=1
+sample_work_order_id=6
+sample_evidence_id=1
+sample_storage_path=work-order-6/evidence-40219c94-cef8-4c1c-aa07-962938ed4b64.txt
+expected_sample_size_bytes=215
+actual_sample_size_bytes=215
+expected_sample_sha256=4b4dc6fd2e07d5cd1713f846d9baf4c659209535872c5add945f65f252290150
+actual_sample_sha256=4b4dc6fd2e07d5cd1713f846d9baf4c659209535872c5add945f65f252290150
+api_consistency_status=consistent
+api_consistent=true
+file_exists=true
+size_matches=true
+checksum_matches=true
+http_api_restore_status=validated
+```
+
+Nginx path verified:
+
+```text
+/healthz
+/readyz
+/api/work-orders/summary
+/api/work-orders/6/evidence-files
+/api/work-orders/6/evidence-files/1/consistency
+```
+
+Runtime findings fixed in PR #119:
+
+```text
+NFS export CIDR needed restore-lab 10.60 app/backup subnets.
+PostgreSQL pg_hba needed restore-lab 10.60 app/backup subnets.
+Restored file copy had to avoid preserving source uid/gid on root_squash NFS.
+HTTP/API summary total had to read data.total instead of summing total plus buckets.
+```
+
+Final Phase 3 claim:
+
+```text
+Restore-lab DB/file/API recovery validation succeeded.
+Backup artifact creation had already been validated separately in Phase 2B.
+Restore was validated separately in restore-lab on 2026-07-12.
+```
+
+AWS resources from the restore-lab validation window were destroyed after evidence collection.
+
+## Phase 4. Observability baseline
+
+Current status:
+
+```text
+Design completed.
+Ansible baseline prepared.
+Runtime validation pending.
+```
+
+Prepared files:
+
+```text
+docs/01-architecture/observability-evidence-baseline.md
+docs/03-runbooks/observability-baseline.md
+docs/03-runbooks/observability-evidence-collection-baseline.md
+infra/ansible/playbooks/observability-baseline.yml
+```
+
+Prepared evidence scope:
+
+```text
+node health/resource state for nginx-01, app-01, db-primary-01, nfs-01, backup-01
+Nginx access/error log visibility
+ops-sample-service journald visibility
+PostgreSQL service/log visibility
+NFS export/filesystem visibility
+backup/restore artifact and job-log visibility
+request-path probe TSV/report
+optional DB service unavailable incident report
+```
+
+Important safety default:
+
+```text
+observability_run_db_service_incident=false
+```
+
+This prevents accidental PostgreSQL service stops during ordinary baseline collection. Enable it only during a planned runtime validation window.
+
+Phase 4 has not yet produced runtime evidence. Do not claim observability validation success until a runtime evidence PR documents actual collected logs/metrics and an incident report.
 
 ## Workload relationship
 
@@ -252,13 +358,14 @@ If OpenKoda cannot cleanly support WEB/WAS/DB/file/backup/observability drills, 
 Avoid:
 
 ```text
-more lab-full-min drills with the same pattern
 re-running the full storage or backup validation window without a new restore/observability reason
+claiming Phase 4 success without runtime evidence
+Grafana dashboard-first work
+Prometheus/Loki platform expansion before the basic incident report exists
 OpenKoda feature/UI work
 Terraform-only refactoring without an incident/recovery scenario
 Kubernetes/EKS/GitOps work
 managed AWS architecture replacement
-Grafana dashboard-first work
 creating many small issues without a roadmap link
 ```
 
@@ -267,37 +374,47 @@ creating many small issues without a roadmap link
 Next recommended task:
 
 ```text
-[DESIGN] Define restore-lab DB/file recovery validation path
+[VALIDATION] Run and document observability baseline evidence
 ```
 
 Purpose:
 
 ```text
-Turn the preserved backup artifacts into a recovery proof.
-The next milestone must restore PostgreSQL metadata and NFS file objects in a separate restore-lab, then verify API consistency.
+Run one planned AWS runtime validation window for Phase 4.
+Collect node, service, log, request-path, and optional DB-service-incident evidence.
+Destroy AWS resources after evidence collection.
+Document the result in docs/04-evidence.
 ```
 
-Suggested scope:
+Suggested runtime sequence:
 
 ```text
-Define restore-lab topology and minimum nodes.
-Decide how preserved local backup artifacts are injected into restore-lab.
-Define pg_restore procedure for opsdb.
-Define restic restore procedure for file objects.
-Verify metadata row counts, sample storage_path, sample SHA-256, and HTTP/API consistency.
-Document recovery gaps and any manual steps.
+1. WSL: confirm repository and Ansible syntax checks.
+2. Git Bash: terraform apply once for the chosen lab-full-ops profile.
+3. WSL: populate inventories/lab-full-ops/hosts.yml from Terraform outputs.
+4. WSL: run Ansible ping.
+5. WSL: configure the existing WEB/WAS/DB/NFS/Backup baseline as needed.
+6. WSL: run observability-baseline.yml with the DB incident disabled first.
+7. WSL: if baseline evidence is healthy, optionally re-run with observability_run_db_service_incident=true.
+8. WSL: preserve evidence under /tmp/observability-baseline-validation-*.
+9. Git Bash: terraform destroy once.
+10. WSL/Git: create docs/04-evidence/observability-baseline-validation-YYYY-MM-DD.md.
 ```
 
-## Recommended next implementation sequence
+Narrow success claim after runtime evidence:
 
 ```text
-1. [VALIDATION] Document lab-full-ops backup artifact evidence
-2. [DESIGN] Define restore-lab DB/file recovery validation path
-3. [TF] Add restore-lab minimal recovery profile, if a separate profile is needed
-4. [ANSIBLE] Restore DB and file artifacts into restore-lab
-5. [VALIDATION] restore-lab DB/file/API consistency verification
-6. [OBS] Prometheus/Loki minimum observability after recovery path is proven
-7. [INCIDENT] metric/log-based incident report
+Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
+```
+
+Do not claim:
+
+```text
+production monitoring maturity
+complete Prometheus/Grafana/Loki platform coverage
+Alertmanager maturity
+HA or automated failover
+SLO/SLA compliance
 ```
 
 ## Runtime policy
@@ -335,26 +452,31 @@ Before doing any work, read the following repository documents and treat them as
 - docs/00-project/roadmap.md
 - docs/00-project/workload-strategy.md
 - docs/00-project/next-chat-handoff.md
+- docs/01-architecture/restore-lab-recovery-validation.md
+- docs/01-architecture/observability-evidence-baseline.md
+- docs/03-runbooks/observability-baseline.md
+- docs/03-runbooks/observability-evidence-collection-baseline.md
 - docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
 - docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md
+- docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
 
 The fixed project theme is:
 
 AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
 
-This is not an OpenKoda installation project, not a Terraform showcase, and not a Spring Boot sample app project. It is a VM-based operations portfolio focused on WEB/WAS/DB/storage/observability/backup tier separation, failure diagnosis, and recovery validation.
+This is not an OpenKoda installation project, not a Terraform showcase, not a Spring Boot sample app project, not Kubernetes/EKS/GitOps work, and not a Grafana dashboard-first project. It is a VM-based operations portfolio focused on WEB/WAS/DB/storage/backup/observability tier separation, failure diagnosis, and recovery validation.
 
 Current completed state:
 - Phase 0 lab-runtime smoke test completed.
 - Phase 1 lab-full-min WEB/WAS/DB completed.
 - Phase 2A lab-full-ops storage validation completed.
-- Phase 2B backup artifact creation evidence collected.
-- Backup validation produced pg_dump, NFS file inventory/checksum, restic snapshot, manifest, and preserved local artifact archives.
-- Restore has not been validated yet.
-- AWS resources from the backup validation window were destroyed.
+- Phase 2B backup artifact creation completed as backup-artifact evidence.
+- Phase 3 restore-lab DB/file/API recovery validation completed.
+- Phase 4 observability design and Ansible evidence collection baseline are prepared.
+- Phase 4 runtime validation has not yet been executed.
 
 Next recommended task:
-[DESIGN] Define restore-lab DB/file recovery validation path
+[VALIDATION] Run and document observability baseline evidence
 
 Proceed from the roadmap and avoid creating unrelated issues or PRs.
 ```
