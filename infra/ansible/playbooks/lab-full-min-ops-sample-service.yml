@@ -48,6 +48,41 @@
           Build the app first, or set ops_app_jar_url to a downloadable artifact.
       when: not ops_app_uses_remote_artifact | bool
 
+    - name: Verify local jar contains required runtime classes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import sys
+        import zipfile
+
+        jar = r'''{{ effective_ops_app_jar_source_path }}'''
+        required = json.loads(r'''{{ ops_app_required_jar_entries | default([]) | to_json }}''')
+
+        with zipfile.ZipFile(jar) as archive:
+            entries = set(archive.namelist())
+
+        missing = [entry for entry in required if entry not in entries]
+        if missing:
+            print("missing required jar entries:")
+            for entry in missing:
+                print(entry)
+            sys.exit(1)
+
+        print("required jar entries present:")
+        for entry in required:
+            print(entry)
+        PY
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      register: ops_app_required_jar_entries_check
+      changed_when: false
+      when:
+        - not ops_app_uses_remote_artifact | bool
+        - ops_app_required_jar_entries | default([]) | length > 0
+
   tasks:
     - name: Install Java runtime and curl
       ansible.builtin.apt:
@@ -216,6 +251,7 @@
           evidence_file_root={{ effective_ops_evidence_file_root }}
           evidence_root_check_rc={{ ops_app_evidence_root_check.rc | default('not-run') }}
           artifact_source={{ ops_app_jar_url if ops_app_uses_remote_artifact | bool else effective_ops_app_jar_source_path }}
+          artifact_required_entries={{ ops_app_required_jar_entries | default([]) | join(',') }}
           healthcheck_rc={{ ops_app_healthcheck.rc | default('n/a') }}
           readycheck_rc={{ ops_app_readycheck.rc | default('n/a') }}
           work_orders_summary_rc={{ ops_app_work_orders_summary_check.rc | default('n/a') }}
