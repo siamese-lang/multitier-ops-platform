@@ -40,6 +40,7 @@ cleanup status
 | Prometheus metrics distinguished DB host reachability from DB service failure | `docs/04-evidence/observability-metrics-validation-2026-07-12.md` |
 | Prometheus rule evaluation detected PostgreSQL inactivity while DB host stayed reachable | `docs/04-evidence/observability-alert-validation-2026-07-12.md` |
 | `ops-sample-service` includes a lightweight work-order/evidence-file web workflow | repository implementation: `apps/ops-sample-service/README.md`, `apps/ops-sample-service/FAILURE_LAB.md` |
+| Enhanced service workflow validation is prepared | `docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md`, `infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml` |
 
 ## Current evidence boundary
 
@@ -61,6 +62,9 @@ Repository implementation evidence:
 - status history and audit logs
 - evidence upload/download workflow
 - WEB/WAS failure-lab endpoints
+
+Validation preparation:
+- enhanced service workflow validation playbook and runbook
 ```
 
 Do not claim these until a new runtime validation window is completed:
@@ -252,6 +256,31 @@ apps/ops-sample-service/FAILURE_LAB.md
 docs/00-project/ops-sample-service-completion-scope.md
 ```
 
+## Enhanced service validation preparation
+
+These files prepare the next runtime evidence window, but they are not proof that the runtime validation has already succeeded:
+
+```text
+docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
+infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
+```
+
+The prepared validation covers:
+
+```text
+/work-orders web page smoke
+/work-orders/new form smoke
+web-form work order creation
+web-form status transition
+event history and audit log visibility
+evidence upload through multipart form
+evidence download through web endpoint
+DB metadata and NFS file object consistency
+failure-lab sleep/db-sleep/file-storage-check/upload-limits
+Nginx request-id log sample
+app journald request-id log sample
+```
+
 ## Evidence archives kept locally
 
 Known local archives from the 2026-07-12 validation windows include:
@@ -290,6 +319,7 @@ Core operations evidence: sufficient for portfolio summary
 Storage/backup/restore evidence: sufficient for recovery narrative
 Observability evidence: sufficient for diagnosis narrative
 Service implementation evidence: baseline completed in repository code
+Enhanced service validation playbook: prepared, but runtime evidence pending
 Enhanced service runtime evidence: pending validation refresh
 Prometheus extension work: frozen after alert rule evaluation
 AWS runtime: not needed for docs/static prep; needed only for planned enhanced-service validation window
