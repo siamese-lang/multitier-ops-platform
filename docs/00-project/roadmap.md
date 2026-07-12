@@ -14,17 +14,18 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 Phase 0. lab-runtime smoke test: completed
 Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
 Phase 2A. lab-full-ops storage validation: completed
-Phase 2B. lab-full-ops backup artifact creation: evidence collected
-Phase 3. restore-lab recovery validation: next required milestone
-Phase 4. observability baseline: after restore path is defined/proven
-Phase 5. advanced incident reports and failover: optional after core recovery
+Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
+Phase 3. restore-lab DB/file/API recovery validation: completed
+Phase 4. observability baseline: next recommended milestone
+Phase 5. advanced incident reports and failover: optional after core observability
 ```
 
 Important boundary:
 
 ```text
-Backup artifact creation is not recovery proof.
-The project should not claim backup/restore completion until restore-lab validates DB, file, checksum, and HTTP/API consistency from preserved artifacts.
+Backup artifact creation and restore validation were proven separately.
+The project may now claim restore-lab DB/file/API recovery validation success,
+but should not overclaim production-grade HA, automated failover, or managed backup coverage.
 ```
 
 ## Phase 0. lab-runtime smoke test — completed
@@ -81,18 +82,6 @@ Validated operating path:
 operator -> nginx-01:443 -> app-01/app-02:8080 -> db-primary-01:5432
 ```
 
-Completed build items:
-
-```text
-Terraform lab-full-min baseline
-Ansible inventory/control path
-PostgreSQL primary configuration
-ops-sample-service systemd deployment
-Nginx HTTPS reverse proxy
-GitHub Actions jar artifact workflow
-Nginx HTTPS ingress rule
-```
-
 Completed validation scenarios:
 
 ```text
@@ -109,13 +98,6 @@ Key evidence documents:
 ```text
 docs/04-evidence/lab-full-min-web-was-db-integrated-validation.md
 docs/04-evidence/lab-full-min-continuous-operations-validation.md
-```
-
-Important boundary:
-
-```text
-Do not keep adding similar lab-full-min drills unless they clearly unlock Phase 2 or recovery evidence.
-The minimum WEB/WAS/DB operating story is already strong enough.
 ```
 
 ## Phase 2A. lab-full-ops storage validation — completed
@@ -145,9 +127,6 @@ Validated reduced topology:
 
 [Private Ops Subnet]
 - backup-01
-
-Temporary validation support:
-- NAT Gateway enabled only for package installation during the batched runtime window
 ```
 
 Validated operating path:
@@ -156,19 +135,6 @@ Validated operating path:
 operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
                                  |
                                  -> nfs-01:/srv/ops-sample/files
-```
-
-Completed build items:
-
-```text
-Terraform reduced lab-full-ops profile
-lab-full-ops inventory/control path
-PostgreSQL primary wrapper for lab-full-ops
-nfs-01 export baseline
-app-01 NFS client mount baseline
-ops-sample-service lab-full-ops deployment
-Nginx reverse proxy wrapper for lab-full-ops
-work-order evidence smoke playbook
 ```
 
 Completed validation scenarios:
@@ -185,7 +151,7 @@ Nginx request-id access log verification
 Terraform destroy after evidence collection
 ```
 
-Runtime findings that were fixed:
+Runtime findings fixed:
 
 ```text
 NFS export root permission mismatch under root_squash
@@ -200,20 +166,13 @@ Key evidence document:
 docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
 ```
 
-Important boundary:
-
-```text
-Do not repeat the full AWS runtime window for small follow-up PRs.
-Use syntax/static checks until a new backup, restore, observability, or incident scenario requires runtime evidence.
-```
-
-## Phase 2B. lab-full-ops backup artifact creation — evidence collected
+## Phase 2B. lab-full-ops backup artifact creation — completed as backup-artifact evidence
 
 Purpose:
 
 ```text
 Create restorable backup artifacts for the already validated DB/file workload.
-The goal is not merely backup creation; the goal is to prepare restore validation.
+The goal was not to claim recovery yet; the goal was to prepare restore validation.
 ```
 
 Validated backup path:
@@ -221,33 +180,6 @@ Validated backup path:
 ```text
 backup-01 -> db-primary-01:5432                  # pg_dump opsdb
 backup-01 -> nfs-01:/srv/ops-sample/files       # NFS file inventory/checksum/restic snapshot
-```
-
-Completed build items:
-
-```text
-backup-01 group vars for backup paths, packages, restic repository, and artifact names
-lab-full-ops backup baseline playbook
-PostgreSQL additional client CIDR support for backup subnet
-backup baseline runbook
-```
-
-Collected runtime evidence:
-
-```text
-Ansible control path across reduced lab-full-ops nodes
-PostgreSQL primary configuration
-NFS storage baseline
-app-01 NFS mount baseline
-ops-sample-service deployment
-Nginx reverse proxy
-work-order evidence smoke
-pg_dump artifact creation
-NFS file inventory and SHA-256 checksum list
-restic snapshot creation
-backup manifest and report
-local preservation of backup artifact archive and evidence bundle
-Terraform destroy after evidence collection
 ```
 
 Key backup identifiers:
@@ -259,7 +191,7 @@ pg_dump_sha256=fe58367d5d43101461483a5054da4b8b520d2cc15e1e4c8ce2dc629082f78b0f
 nfs_file_count=2
 restic_snapshot_id=7f063aa1
 metadata_counts=ops_work_order_evidence_files 1, ops_work_orders 6
-restore_status=not_validated
+restore_status=not_validated_at_backup_phase
 ```
 
 Key evidence document:
@@ -271,12 +203,11 @@ docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md
 Important boundary:
 
 ```text
-Phase 2B has backup artifact creation evidence.
-It still does not prove recovery.
-Do not move to dashboard-first observability work before restore-lab recovery validation is designed.
+Phase 2B proves backup artifact creation only.
+The recovery claim comes from Phase 3 restore-lab validation.
 ```
 
-## Phase 3. restore-lab recovery validation — next required milestone
+## Phase 3. restore-lab DB/file/API recovery validation — completed
 
 Purpose:
 
@@ -284,46 +215,94 @@ Purpose:
 Prove that preserved backup artifacts can restore a working system in a separate environment.
 ```
 
-Recommended next task:
+Validated restore-lab topology:
 
 ```text
-[DESIGN] Define restore-lab DB/file recovery validation path
+restore-lab VPC CIDR: 10.60.0.0/16
+
+[Public Subnet]
+- bastion-01
+- nginx-01
+
+[Private App Subnet]
+- app-01
+
+[Private DB Subnet]
+- db-primary-01
+
+[Private Storage Subnet]
+- nfs-01
+
+[Private Ops Subnet]
+- backup-01
 ```
 
-Target flow:
+Validated recovery flow:
 
 ```text
-1. Use the preserved local backup artifact archive from Phase 2B.
-2. Create or define a minimal restore-lab environment.
-3. Inject/copy backup artifacts into the restore target.
+1. Use preserved local backup artifact from Phase 2B.
+2. Create a minimal restore-lab environment.
+3. Copy backup artifacts to backup-01.
 4. Restore PostgreSQL metadata with pg_restore.
-5. Restore NFS-backed file objects with restic.
+5. Restore NFS-backed file objects from restic snapshot.
 6. Start app and Nginx path against restored DB/file tiers.
 7. Validate metadata row counts.
 8. Validate sample evidence storage_path.
 9. Validate sample file SHA-256.
 10. Verify application consistency endpoint returns true.
 11. Verify HTTP path through Nginx.
-12. Document recovery gaps and manual steps.
+12. Preserve evidence bundle.
 13. Destroy restore-lab resources after evidence collection.
 ```
 
-Required evidence:
+Key restore identifiers:
 
 ```text
-artifact injection/copy command output
-pg_restore command output
-restic restore command output
-metadata count comparison
-sample checksum comparison
-HTTP/API endpoint verification
-Terraform destroy and post-destroy state check
-recovery report
+source_backup_id=lab-full-ops-backup-20260712T072623
+restore_environment=restore-lab
+pg_restore_status=validated
+restic_restore_status=validated
+actual_work_order_count=6
+actual_evidence_file_count=1
+api_consistency_status=consistent
+api_consistent=true
+file_exists=true
+size_matches=true
+checksum_matches=true
+actual_sha256=4b4dc6fd2e07d5cd1713f846d9baf4c659209535872c5add945f65f252290150
+http_api_restore_status=validated
 ```
 
-This phase is important because it proves recovery rather than merely backup creation.
+Runtime findings fixed after validation:
 
-## Phase 4. Observability baseline — after restore path
+```text
+NFS export CIDR needed restore-lab 10.60 app/backup subnets
+PostgreSQL pg_hba needed restore-lab 10.60 app/backup subnets
+restored file copy had to avoid preserving source uid/gid on root_squash NFS
+HTTP/API summary total had to read data.total instead of summing total plus buckets
+```
+
+Key evidence document:
+
+```text
+docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
+```
+
+Related fix PR:
+
+```text
+PR #119 [FIX] Make restore-lab runtime validation profile-aware
+```
+
+Final Phase 3 claim:
+
+```text
+Restore-lab DB/file/API recovery validation succeeded.
+Backup artifact creation had already been validated separately in Phase 2B.
+Restore was validated separately in restore-lab on 2026-07-12.
+```
+
+## Phase 4. Observability baseline — next recommended milestone
 
 Purpose:
 
@@ -332,7 +311,7 @@ Collect logs and metrics that support incident diagnosis.
 The goal is not a pretty dashboard; the goal is evidence for operating decisions.
 ```
 
-Recommended scope after restore-lab planning/proof:
+Recommended scope:
 
 ```text
 node metrics for nginx-01, app-01, db-primary-01, nfs-01, backup-01
@@ -343,9 +322,20 @@ NFS/storage host metrics
 one incident report that uses logs or metrics to narrow the failure class
 ```
 
-Do not start with Grafana dashboard polish. Start with evidence-producing metrics/logs that help diagnose failures.
+Recommended next task:
 
-## Phase 5. Advanced operations — optional after core recovery
+```text
+[DESIGN] Define observability evidence baseline for EC2 WEB/WAS/DB/Storage/Backup operations
+```
+
+Important boundary:
+
+```text
+Do not start with Grafana dashboard polish.
+Start with evidence-producing metrics/logs that help diagnose failures.
+```
+
+## Phase 5. Advanced operations — optional after core observability
 
 Possible items:
 
@@ -357,35 +347,4 @@ Tomcat thread saturation
 Prometheus alert rule and Alertmanager notification
 Loki log query-based incident diagnosis
 p95/p99 latency comparison before/after tuning
-```
-
-These should be added only after backup artifact evidence and restore-lab recovery evidence exist.
-
-## Work that should stop now
-
-Avoid the following unless a clear evidence gap is identified:
-
-```text
-more lab-full-min drills with the same pattern
-repeating the storage or backup validation runtime window without a new restore/observability reason
-OpenKoda UI or feature work
-Terraform-only refactoring without an operating scenario
-GitHub issue/PR churn without validation value
-dashboard-first monitoring work
-managed AWS replacement of VM-based tiers
-```
-
-## Definition of done for the portfolio
-
-The project reaches a strong portfolio state when the repository includes:
-
-```text
-architecture documents
-Terraform environment lifecycle
-Ansible configuration/runbooks
-WEB/WAS/DB/file/observability/backup tier descriptions
-at least four incident or recovery scenarios
-logs/metrics/command evidence
-restore-lab recovery proof
-portfolio summary for reviewers
 ```
