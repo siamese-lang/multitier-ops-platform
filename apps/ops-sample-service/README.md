@@ -1,20 +1,24 @@
 # ops-sample-service
 
-`ops-sample-service` is a small Spring Boot workload for the `lab-full-min` WEB/WAS/DB operations lab and the later `lab-full-ops` storage consistency validation path.
+`ops-sample-service` is the lightweight operated service used by this repository's WEB/WAS/DB/Storage/Backup/Observability operations portfolio.
 
-This repository is an operations portfolio, not an application development portfolio. The service is intentionally small, but it is not an empty health-check app. It exists to create deterministic operating evidence for a VM-based multi-tier system.
+It is not intended to become a commercial ITSM clone. Its purpose is to be clear enough to answer “what service did you operate?” while still keeping the project focused on WEB/WAS operations, incident diagnosis, and recovery validation.
 
-The fixed project theme is:
+Service identity:
+
+```text
+운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스
+```
+
+The fixed project theme remains:
 
 ```text
 AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
 ```
 
-The app must therefore remain a workload used by the operating environment. It must not become the center of the project.
-
 ## Role in the project
 
-OpenKoda remains Phase 0 smoke-test evidence for running a third-party workload. This service is added because it gives the lab controllable behavior that can be used to verify incidents, logs, storage consistency, and recovery procedures.
+This service gives the lab controllable behavior that can be used to verify incidents, logs, storage consistency, backup artifacts, and restore procedures.
 
 It provides deterministic evidence for:
 
@@ -22,13 +26,14 @@ It provides deterministic evidence for:
 - WAS process health
 - DB-dependent readiness
 - app node identity
-- HTTP request logging
-- DB read/write traffic
-- DB-backed state changes
+- HTTP request logging with request IDs
+- DB-backed work-order state
+- work-order event history
+- operation audit logs
 - DB metadata plus NFS file-object consistency checks in `lab-full-ops`
-- later `app-01` failure and `app-02` continuation drills
-- later PostgreSQL failure and recovery drills
-- later file storage failure, backup, and restore drills
+- app node failure and continuation drills
+- PostgreSQL failure and recovery drills
+- file storage failure, backup, and restore drills
 
 ## Runtime role
 
@@ -56,27 +61,30 @@ HTTP request -> Nginx -> app-01 -> PostgreSQL metadata
 
 ## Data model
 
-The service creates one table on the first DB-backed work-order request:
+The service creates and maintains these tables on the first DB-backed request:
 
 ```text
 ops_work_orders
+ops_work_order_events
+ops_operation_audit_logs
 ```
 
-It inserts seed records when the table is empty. These records are deliberately tied to operating scenarios:
-
-- Nginx upstream validation
-- DB readiness validation
-- app node identity evidence
-- app-01 failure drill
-- PostgreSQL restart/recovery drill
-
-For `lab-full-ops`, the service also creates this table when the first evidence-file request succeeds:
+For `lab-full-ops`, evidence-file requests also create:
 
 ```text
 ops_work_order_evidence_files
 ```
 
-That table links work-order records to generated evidence file objects stored under the configured mounted file path. This gives the lab a DB/file consistency target without turning the repository into a product file-management project.
+Table roles:
+
+| Table | Purpose |
+|---|---|
+| `ops_work_orders` | Work request records used by WEB/WAS/DB operating scenarios |
+| `ops_work_order_events` | Status-change and creation history for each work order |
+| `ops_operation_audit_logs` | Operator-visible audit trail for create/status-change actions |
+| `ops_work_order_evidence_files` | DB metadata for generated evidence files stored on the mounted file path |
+
+This gives the lab a small but explainable service domain without turning the repository into an application-development portfolio.
 
 ## Build
 
@@ -110,6 +118,8 @@ GET  /readyz                                              -> 503 when DB env is 
 GET  /db/time                                             -> 503 when DB env is missing
 GET  /api/work-orders                                     -> 503 when DB env is missing
 GET  /api/work-orders/summary                             -> 503 when DB env is missing
+GET  /api/work-orders/{id}/events                         -> 503 when DB env is missing
+GET  /api/audit-logs                                      -> 503 when DB env is missing
 POST /api/work-orders/{id}/evidence-files                 -> 503 when DB env is missing
 GET  /api/work-orders/{id}/evidence-files                 -> 503 when DB env is missing
 GET  /api/work-orders/{id}/evidence-files/{id}/consistency -> 503 when DB env is missing
@@ -146,11 +156,6 @@ curl -s http://localhost:8080/healthz
 
 Readiness check. It checks PostgreSQL connectivity with a simple query.
 
-Expected behavior:
-
-- returns `200` when the DB connection works
-- returns `503` when DB configuration is missing or DB is unavailable
-
 ```bash
 curl -i http://localhost:8080/readyz
 ```
@@ -163,8 +168,6 @@ Node identity endpoint. It returns hostname, local address, role, tier, environm
 curl -s http://localhost:8080/node
 ```
 
-This endpoint is used to prove which app instance served the request.
-
 ### `GET /db/time`
 
 Runs `select now()` against PostgreSQL and returns the DB time.
@@ -175,7 +178,7 @@ curl -i http://localhost:8080/db/time
 
 ### `GET /api/work-orders`
 
-Lists DB-backed work orders. The first successful call creates the table and seed data when needed.
+Lists DB-backed work orders. The first successful call creates the work-order tables and seed data when needed.
 
 ```bash
 curl -s http://localhost:8080/api/work-orders
@@ -192,17 +195,18 @@ curl -s http://localhost:8080/api/work-orders/1
 
 ### `POST /api/work-orders`
 
-Creates a work order and stores it in PostgreSQL.
+Creates a work order and stores it in PostgreSQL. This also records a work-order event and an operation audit log.
 
 ```bash
 curl -s -X POST http://localhost:8080/api/work-orders \
   -H 'Content-Type: application/json' \
-  -d '{"title":"Validate app-02 after app-01 stop","priority":"HIGH","assignee":"ops-admin","description":"Created during an incident drill."}'
+  -H 'X-Request-Id: work-order-create-001' \
+  -d '{"title":"Validate app-02 after app-01 stop","priority":"HIGH","requester":"service-desk","assignee":"ops-admin","description":"Created during an incident drill."}'
 ```
 
 ### `PATCH /api/work-orders/{id}/status`
 
-Updates work order status.
+Updates work order status. This also records a status event and an operation audit log.
 
 Allowed statuses:
 
@@ -210,14 +214,26 @@ Allowed statuses:
 OPEN
 IN_PROGRESS
 DONE
+FAILED
 CANCELLED
 ```
 
 ```bash
 curl -s -X PATCH http://localhost:8080/api/work-orders/1/status \
   -H 'Content-Type: application/json' \
-  -d '{"status":"DONE"}'
+  -H 'X-Request-Id: work-order-status-001' \
+  -d '{"status":"DONE","actor":"ops-admin","message":"Validated through nginx-01 and app-02."}'
 ```
+
+### `GET /api/work-orders/{id}/events`
+
+Lists work-order lifecycle events.
+
+```bash
+curl -s http://localhost:8080/api/work-orders/1/events
+```
+
+This endpoint is used to explain the service as an operated work-request system instead of only a DB health-check API.
 
 ### `GET /api/work-orders/summary`
 
@@ -225,6 +241,15 @@ Returns count by status.
 
 ```bash
 curl -s http://localhost:8080/api/work-orders/summary
+```
+
+### `GET /api/audit-logs`
+
+Lists recent operation audit logs. The optional `limit` query parameter is bounded to 1-100 rows.
+
+```bash
+curl -s http://localhost:8080/api/audit-logs
+curl -s 'http://localhost:8080/api/audit-logs?limit=10'
 ```
 
 ### `POST /api/work-orders/{id}/evidence-files`
@@ -245,7 +270,7 @@ Expected behavior:
 5. Return metadata and immediate consistency result.
 ```
 
-This is not a general upload endpoint. The service does not accept arbitrary user file content or file names.
+This is not a general upload endpoint yet. General file upload/download behavior is a later service-completion PR.
 
 ### `GET /api/work-orders/{id}/evidence-files`
 
@@ -302,7 +327,7 @@ operation
 durationMs
 ```
 
-These fields are evidence aids for Nginx upstream, app failover, DB latency, and DB/file consistency observations.
+These fields are evidence aids for Nginx upstream, app failover, DB latency, DB/file consistency, and status-change observations.
 
 ## Request log evidence
 
@@ -312,7 +337,7 @@ Every HTTP request is logged with fields suitable for incident evidence:
 event=http_request requestId=<id> method=<method> path=<path> status=<status> durationMs=<ms> remoteAddr=<ip> node=<hostname> role=<role> tier=<tier>
 ```
 
-The service also returns an `X-Request-Id` response header. A caller can provide `X-Request-Id` to correlate curl output, Nginx access logs, and app logs.
+The service also returns an `X-Request-Id` response header. A caller can provide `X-Request-Id` to correlate curl output, Nginx access logs, app logs, and operation audit rows.
 
 Example:
 
@@ -321,6 +346,30 @@ curl -i -H 'X-Request-Id: incident-app-01-001' http://<nginx-public-ip>/api/work
 ```
 
 ## Operational evidence examples
+
+### Work-order lifecycle evidence
+
+```bash
+curl -s -X POST http://<nginx-public-ip>/api/work-orders \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-Id: create-lifecycle-001' \
+  -d '{"title":"Investigate upload failure","priority":"HIGH","requester":"service-desk","assignee":"ops-admin","description":"Track status and evidence for a WEB/WAS incident."}'
+
+curl -s -X PATCH http://<nginx-public-ip>/api/work-orders/<id>/status \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-Id: update-lifecycle-001' \
+  -d '{"status":"IN_PROGRESS","actor":"ops-admin","message":"Started WEB/WAS diagnosis."}'
+
+curl -s http://<nginx-public-ip>/api/work-orders/<id>/events
+curl -s http://<nginx-public-ip>/api/audit-logs?limit=10
+```
+
+Expected evidence:
+
+- work request exists in PostgreSQL
+- lifecycle events show creation and status transition
+- operation audit logs retain actor/action/result/request ID
+- app request logs and Nginx access logs can be correlated by `X-Request-Id`
 
 ### Nginx upstream routing
 
@@ -402,29 +451,29 @@ Expected evidence:
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `SERVER_PORT` | No | HTTP port. Defaults to `8080`. |
-| `OPS_DB_URL` | For DB checks, work orders, and evidence metadata | PostgreSQL JDBC URL. |
-| `OPS_DB_USERNAME` | For DB checks, work orders, and evidence metadata | PostgreSQL username. |
-| `OPS_DB_PASSWORD` | For DB checks, work orders, and evidence metadata | PostgreSQL password. |
+| `OPS_DB_URL` | For DB checks, work orders, event history, audit logs, and evidence metadata | PostgreSQL JDBC URL. |
+| `OPS_DB_USERNAME` | For DB checks, work orders, event history, audit logs, and evidence metadata | PostgreSQL username. |
+| `OPS_DB_PASSWORD` | For DB checks, work orders, event history, audit logs, and evidence metadata | PostgreSQL password. |
 | `OPS_EVIDENCE_FILE_ROOT` | For evidence file objects | Mounted evidence file root. Defaults to `/mnt/ops-sample/files`. |
 | `OPS_NODE_ROLE` | No | Logical role. Defaults to `app`. |
 | `OPS_NODE_TIER` | No | Logical tier. Defaults to `private-was`. |
 | `OPS_ENVIRONMENT` | No | Environment name. Defaults to `lab-full-min`. |
 | `APP_VERSION` | No | Version string returned by responses. |
 
-## Out of scope
+## Out of scope for this PR
 
-This app does not include:
+This app still does not include:
 
-- UI development
+- full UI workflow
 - authentication
+- complex RBAC
 - OpenKoda customization
-- complex business features
-- general file upload/download behavior
-- arbitrary user-provided file content
+- commercial ITSM clone behavior
+- general user-provided file upload/download behavior
 - PostgreSQL replication
 - backup and restore automation
 - deployment automation
 - Nginx configuration
 - incident drill automation
 
-Those belong to later infrastructure and operations issues.
+Those belong to later service-completion and operations-validation PRs.
