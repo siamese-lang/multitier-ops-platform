@@ -11,15 +11,23 @@ postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_version }}/{{ postgresql
 postgresql_listen_addresses: "*"
 postgresql_port: 5432
 
-# lab-full-ops Terraform default private app subnet CIDR.
-# The existing PostgreSQL playbook still reads this legacy variable name.
-# Keep it as an alias until the shared DB playbook is generalized.
-lab_full_min_app_cidr: "10.50.11.0/24"
+# Source lab default CIDRs from the lab-full-ops Terraform profile.
+lab_full_ops_default_app_cidr: "10.50.11.0/24"
+lab_full_ops_default_backup_cidr: "10.50.41.0/24"
+
+# Restore-lab CIDRs from the restore-lab recovery Terraform profile.
+# These are selected automatically when environment_name=restore-lab.
+restore_lab_app_cidr: "10.60.11.0/24"
+restore_lab_backup_cidr: "10.60.41.0/24"
+
+# The existing PostgreSQL playbook still reads this legacy variable name for
+# the primary application client subnet. Keep it as an alias until the shared DB
+# playbook is generalized, but make it profile-aware for restore-lab validation.
+lab_full_min_app_cidr: "{{ restore_lab_app_cidr if environment_name | default('lab-full-ops') == 'restore-lab' else lab_full_ops_default_app_cidr }}"
 lab_full_ops_app_cidr: "{{ lab_full_min_app_cidr }}"
 
-# lab-full-ops Terraform default private ops subnet CIDR.
-# backup-01 uses this network to run pg_dump against db-primary-01.
-lab_full_ops_backup_cidr: "10.50.41.0/24"
+# backup-01 uses this network to run pg_dump/pg_restore against db-primary-01.
+lab_full_ops_backup_cidr: "{{ restore_lab_backup_cidr if environment_name | default('lab-full-ops') == 'restore-lab' else lab_full_ops_default_backup_cidr }}"
 postgresql_additional_client_cidrs:
   - "{{ lab_full_ops_backup_cidr }}"
 
