@@ -31,6 +31,7 @@ It provides deterministic evidence for:
 - web-based work-order list/detail/create/status-change workflow
 - work-order event history
 - operation audit logs
+- evidence file upload and download through the web workflow
 - DB metadata plus NFS file-object consistency checks in `lab-full-ops`
 - app node failure and continuation drills
 - PostgreSQL failure and recovery drills
@@ -83,7 +84,7 @@ Table roles:
 | `ops_work_orders` | Work request records used by WEB/WAS/DB operating scenarios |
 | `ops_work_order_events` | Status-change and creation history for each work order |
 | `ops_operation_audit_logs` | Operator-visible audit trail for create/status-change actions |
-| `ops_work_order_evidence_files` | DB metadata for generated evidence files stored on the mounted file path |
+| `ops_work_order_evidence_files` | DB metadata for generated or uploaded evidence files stored on the mounted file path |
 
 This gives the lab a small but explainable service domain without turning the repository into an application-development portfolio.
 
@@ -135,6 +136,8 @@ export OPS_DB_URL='jdbc:postgresql://<db-primary-private-ip>:5432/opsdb'
 export OPS_DB_USERNAME='ops_user'
 export OPS_DB_PASSWORD='<password>'
 export OPS_EVIDENCE_FILE_ROOT='/mnt/ops-sample/files'
+export OPS_MULTIPART_MAX_FILE_SIZE='20MB'
+export OPS_MULTIPART_MAX_REQUEST_SIZE='20MB'
 export OPS_NODE_ROLE='app'
 export OPS_NODE_TIER='private-was'
 export OPS_ENVIRONMENT='lab-full-ops'
@@ -155,14 +158,29 @@ The service includes a small server-rendered HTML workflow so that it can be exp
 | `GET /work-orders` | Lists work orders, status summary, and recent audit logs |
 | `GET /work-orders/new` | Renders the create-work-order form |
 | `POST /work-orders` | Creates a work order from the web form |
-| `GET /work-orders/{id}` | Shows work-order detail, status history, evidence metadata, and operational links |
+| `GET /work-orders/{id}` | Shows work-order detail, status history, evidence files, and operational links |
 | `POST /work-orders/{id}/status` | Updates work-order status and records event/audit rows |
+| `POST /work-orders/{id}/evidence` | Uploads a user-provided evidence file to the configured file storage path and records metadata in PostgreSQL |
+| `GET /work-orders/{id}/evidence/{evidenceId}/download` | Downloads a stored evidence file through the web workflow |
 
 Web workflow examples:
 
 ```bash
 curl -i http://localhost:8080/work-orders
 curl -i http://localhost:8080/work-orders/new
+```
+
+Evidence upload example:
+
+```bash
+curl -i -F 'file=@/tmp/sample-evidence.txt' \
+  http://localhost:8080/work-orders/1/evidence
+```
+
+Evidence download example:
+
+```bash
+curl -OJ http://localhost:8080/work-orders/1/evidence/1/download
 ```
 
 The web pages are intentionally simple. They exist to make the operated service explainable and to exercise WEB/WAS request paths through Nginx, not to become a full front-end project.
@@ -279,7 +297,7 @@ curl -s 'http://localhost:8080/api/audit-logs?limit=10'
 
 ### `POST /api/work-orders/{id}/evidence-files`
 
-Creates a small generated evidence file for an existing work order.
+Creates a small generated evidence file for an existing work order. This endpoint remains for deterministic runtime validation and backward compatibility with existing evidence playbooks.
 
 ```bash
 curl -s -X POST http://localhost:8080/api/work-orders/1/evidence-files
@@ -295,7 +313,7 @@ Expected behavior:
 5. Return metadata and immediate consistency result.
 ```
 
-This is not a general upload endpoint yet. General file upload/download behavior is a later service-completion PR.
+For user-provided evidence files, use the web workflow endpoint `POST /work-orders/{id}/evidence`.
 
 ### `GET /api/work-orders/{id}/evidence-files`
 
@@ -352,7 +370,7 @@ operation
 durationMs
 ```
 
-These fields are evidence aids for Nginx upstream, app failover, DB latency, DB/file consistency, and status-change observations.
+These fields are evidence aids for Nginx upstream, app failover, DB latency, DB/file consistency, upload/download, and status-change observations.
 
 ## Request log evidence
 
@@ -386,6 +404,25 @@ Expected evidence:
 - DB unavailability changes the web workflow from normal list rendering to an operator-visible error page.
 - request logs still capture method, path, status, duration, node identity, and request ID.
 
+### Evidence upload/download evidence
+
+```bash
+printf 'WEB/WAS upload evidence\n' > /tmp/sample-evidence.txt
+curl -i -F 'file=@/tmp/sample-evidence.txt' http://<nginx-public-ip>/work-orders/<id>/evidence
+curl -s http://<nginx-public-ip>/api/work-orders/<id>/evidence-files
+curl -OJ http://<nginx-public-ip>/work-orders/<id>/evidence/<evidenceId>/download
+curl -s http://<nginx-public-ip>/api/work-orders/<id>/evidence-files/<evidenceId>/consistency
+```
+
+Expected evidence:
+
+- WEB tier accepts a multipart upload and proxies it to WAS.
+- WAS writes the uploaded file to the mounted file storage path.
+- PostgreSQL stores file metadata including relative path, size, and SHA-256.
+- the download path returns the stored file through the web workflow.
+- consistency API confirms that DB metadata and file object match.
+- Nginx/app request logs show upload and download request paths.
+
 ### Work-order lifecycle evidence
 
 ```bash
@@ -405,10 +442,10 @@ curl -s http://<nginx-public-ip>/api/audit-logs?limit=10
 
 Expected evidence:
 
-- work request exists in PostgreSQL
-- lifecycle events show creation and status transition
-- operation audit logs retain actor/action/result/request ID
-- app request logs and Nginx access logs can be correlated by `X-Request-Id`
+- work request exists in PostgreSQL.
+- lifecycle events show creation and status transition.
+- operation audit logs retain actor/action/result/request ID.
+- app request logs and Nginx access logs can be correlated by `X-Request-Id`.
 
 ### Nginx upstream routing
 
@@ -418,9 +455,9 @@ for i in {1..10}; do curl -s http://<nginx-public-ip>/node; echo; done
 
 Expected evidence:
 
-- responses come from app nodes behind Nginx
-- hostname/localAddress changes between app instances when both are healthy
-- Nginx access log and app request log share request timing evidence
+- responses come from app nodes behind Nginx.
+- hostname/localAddress changes between app instances when both are healthy.
+- Nginx access log and app request log share request timing evidence.
 
 ### DB-backed data flow
 
@@ -431,9 +468,9 @@ curl -s http://<nginx-public-ip>/api/work-orders
 
 Expected evidence:
 
-- app reaches PostgreSQL
-- seeded records are returned
-- the same records are visible regardless of which app node served the request
+- app reaches PostgreSQL.
+- seeded records are returned.
+- the same records are visible regardless of which app node served the request.
 
 ### DB/file consistency flow
 
@@ -448,11 +485,11 @@ curl -s http://<nginx-public-ip>/api/work-orders/1/evidence-files/<evidenceId>/c
 
 Expected evidence:
 
-- work-order metadata exists in PostgreSQL
-- evidence-file metadata exists in PostgreSQL
-- file object exists on the mounted path
-- file size and SHA-256 match metadata
-- response includes node identity for the app node that handled the request
+- work-order metadata exists in PostgreSQL.
+- evidence-file metadata exists in PostgreSQL.
+- file object exists on the mounted path.
+- file size and SHA-256 match metadata.
+- response includes node identity for the app node that handled the request.
 
 ### App node failure drill
 
@@ -464,9 +501,9 @@ curl -s http://<nginx-public-ip>/api/work-orders/summary
 
 Expected evidence:
 
-- Nginx continues routing to the remaining healthy app node
-- DB-backed records remain available
-- app logs show only the surviving node receiving requests after failover
+- Nginx continues routing to the remaining healthy app node.
+- DB-backed records remain available.
+- app logs show only the surviving node receiving requests after failover.
 
 ### DB failure drill
 
@@ -474,18 +511,16 @@ Expected evidence:
 # stop PostgreSQL later with Ansible/systemd
 curl -i http://<nginx-public-ip>/healthz
 curl -i http://<nginx-public-ip>/readyz
-curl -i http://<nginx-public-ip>/work-orders
 curl -i http://<nginx-public-ip>/api/work-orders
 ```
 
 Expected evidence:
 
-- `/healthz` can still return `200`
-- `/readyz` returns `503`
-- DB-backed API returns `503`
-- DB-backed web workflow renders an operator-visible error page
-- app request logs show DB-backed endpoints failing while process health remains up
-- after PostgreSQL recovery, readiness and data APIs return to normal
+- `/healthz` can still return `200`.
+- `/readyz` returns `503`.
+- DB-backed API returns `503`.
+- app request logs show DB-backed endpoints failing while process health remains up.
+- after PostgreSQL recovery, readiness and data APIs return to normal.
 
 ## Environment variables
 
@@ -496,6 +531,8 @@ Expected evidence:
 | `OPS_DB_USERNAME` | For DB checks, work orders, event history, audit logs, and evidence metadata | PostgreSQL username. |
 | `OPS_DB_PASSWORD` | For DB checks, work orders, event history, audit logs, and evidence metadata | PostgreSQL password. |
 | `OPS_EVIDENCE_FILE_ROOT` | For evidence file objects | Mounted evidence file root. Defaults to `/mnt/ops-sample/files`. |
+| `OPS_MULTIPART_MAX_FILE_SIZE` | No | Spring multipart per-file upload limit. Defaults to `20MB`. |
+| `OPS_MULTIPART_MAX_REQUEST_SIZE` | No | Spring multipart request upload limit. Defaults to `20MB`. |
 | `OPS_NODE_ROLE` | No | Logical role. Defaults to `app`. |
 | `OPS_NODE_TIER` | No | Logical tier. Defaults to `private-was`. |
 | `OPS_ENVIRONMENT` | No | Environment name. Defaults to `lab-full-min`. |
@@ -509,7 +546,6 @@ This app still does not include:
 - complex RBAC
 - OpenKoda customization
 - commercial ITSM clone behavior
-- general user-provided file upload/download behavior
 - PostgreSQL replication
 - backup and restore automation
 - deployment automation

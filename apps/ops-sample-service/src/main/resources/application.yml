@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: ops-sample-service
+  servlet:
+    multipart:
+      max-file-size: ${OPS_MULTIPART_MAX_FILE_SIZE:20MB}
+      max-request-size: ${OPS_MULTIPART_MAX_REQUEST_SIZE:20MB}
 
 ops:
   evidence-files:

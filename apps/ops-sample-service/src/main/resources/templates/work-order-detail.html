@@ -18,9 +18,11 @@
     .success { background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534; }
     label { display: block; font-weight: 600; margin-top: 0.8rem; }
     select, input, textarea, button { box-sizing: border-box; width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    input[type="file"] { border: 1px solid #bcccdc; border-radius: 0.375rem; background: #f8fafc; }
     textarea { min-height: 5rem; }
     button { border: 0; border-radius: 0.375rem; background: #165dba; color: #fff; cursor: pointer; }
     .pill { display: inline-block; border: 1px solid #bcccdc; border-radius: 999px; padding: 0.25rem 0.55rem; background: #f8fafc; margin-right: 0.25rem; }
+    .hash { max-width: 20rem; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -31,7 +33,7 @@
 
 <header>
   <h1 th:text="${workOrder.title}">Work order title</h1>
-  <p class="muted">작업 요청 상세, 상태 변경, 이력, 증빙 파일 메타데이터를 확인합니다.</p>
+  <p class="muted">작업 요청 상세, 상태 변경, 이력, 증빙 파일 업로드·다운로드, 메타데이터를 확인합니다.</p>
 </header>
 
 <div class="grid">
@@ -86,8 +88,8 @@
     </section>
 
     <section class="card">
-      <h2>증빙 파일 메타데이터</h2>
-      <p class="muted">일반 업로드 UI는 다음 단계입니다. 현재는 API로 생성된 증빙 파일의 DB metadata와 NFS object를 확인합니다.</p>
+      <h2>증빙 파일</h2>
+      <p class="muted">업로드된 파일은 WAS가 마운트된 파일 저장소에 저장하고, PostgreSQL에는 파일명·상대 경로·크기·SHA-256 metadata를 기록합니다.</p>
       <table>
         <thead>
         <tr>
@@ -96,7 +98,7 @@
           <th>Storage path</th>
           <th>Size</th>
           <th>SHA-256</th>
-          <th>Consistency</th>
+          <th>Actions</th>
         </tr>
         </thead>
         <tbody>
@@ -105,8 +107,12 @@
           <td th:text="${file.fileName}">file</td>
           <td th:text="${file.storagePath}">path</td>
           <td th:text="${file.sizeBytes}">0</td>
-          <td class="muted" th:text="${file.sha256}">hash</td>
-          <td><a th:href="@{/api/work-orders/{workOrderId}/evidence-files/{evidenceId}/consistency(workOrderId=${workOrder.id},evidenceId=${file.id})}">API 확인</a></td>
+          <td class="muted hash" th:text="${file.sha256}">hash</td>
+          <td>
+            <a th:href="@{/work-orders/{workOrderId}/evidence/{evidenceId}/download(workOrderId=${workOrder.id},evidenceId=${file.id})}">다운로드</a>
+            ·
+            <a th:href="@{/api/work-orders/{workOrderId}/evidence-files/{evidenceId}/consistency(workOrderId=${workOrder.id},evidenceId=${file.id})}">Consistency API</a>
+          </td>
         </tr>
         <tr th:if="${evidenceFiles == null or evidenceFiles.isEmpty()}">
           <td colspan="6" class="muted">등록된 증빙 파일 메타데이터가 없습니다.</td>
@@ -132,6 +138,20 @@
         <textarea id="message" name="message" placeholder="예: Nginx upstream timeout 확인 후 WAS 상태 점검을 시작했습니다."></textarea>
 
         <button type="submit">상태 변경</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>증빙 파일 업로드</h2>
+      <p class="muted">storage root: <span th:text="${storageRoot}">/mnt/ops-sample/files</span></p>
+      <p>
+        <span class="pill">exists <strong th:text="${evidenceDirectory.exists}">true</strong></span>
+        <span class="pill">writable <strong th:text="${evidenceDirectory.writable}">true</strong></span>
+      </p>
+      <form th:action="@{/work-orders/{id}/evidence(id=${workOrder.id})}" method="post" enctype="multipart/form-data">
+        <label for="file">파일</label>
+        <input id="file" type="file" name="file" required>
+        <button type="submit">증빙 파일 업로드</button>
       </form>
     </section>
 
