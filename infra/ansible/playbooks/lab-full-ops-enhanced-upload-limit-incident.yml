@@ -88,7 +88,7 @@
         read -r create_http_code create_time_total < <(curl -k -sS \
           -D "${create_headers}" \
           -o "${create_body}" \
-          -w '%{http_code} %{time_total}' \
+          -w '%{http_code} %{time_total}\n' \
           -H "X-Request-Id: ${request_prefix}-create-work-order" \
           -X POST "${base_url}/work-orders" \
           --data-urlencode "title=Upload failure isolation validation" \
@@ -99,7 +99,7 @@
         test "${create_http_code}" = "302"
 
         location=$(awk 'BEGIN{IGNORECASE=1} /^Location:/ {print $2}' "${create_headers}" | tr -d '\r' | tail -n 1)
-        work_order_id="${location##*/}"
+        work_order_id="$(printf '%s\n' "${location##*/}" | sed -E 's/[;?].*$//')"
         if ! [[ "${work_order_id}" =~ ^[0-9]+$ ]]; then
           echo "could not parse work_order_id from Location header: ${location}" >&2
           exit 1
@@ -124,7 +124,7 @@
         read -r normal_upload_http_code normal_upload_time_total < <(curl -k -sS \
           -D "${normal_upload_headers}" \
           -o "${normal_upload_body}" \
-          -w '%{http_code} %{time_total}' \
+          -w '%{http_code} %{time_total}\n' \
           -H "X-Request-Id: ${request_prefix}-normal-upload" \
           -X POST "${base_url}/work-orders/${work_order_id}/evidence" \
           -F "file=@${normal_file};filename=${normal_file_name}")
@@ -182,7 +182,7 @@
         oversized_curl_output=$(curl -k -sS \
           -D "${oversized_upload_headers}" \
           -o "${oversized_upload_body}" \
-          -w '%{http_code} %{time_total}' \
+          -w '%{http_code} %{time_total}\n' \
           -H "X-Request-Id: ${request_prefix}-oversized-upload" \
           -X POST "${base_url}/work-orders/${work_order_id}/evidence" \
           -F "file=@${oversized_file};filename=${oversized_file_name}" 2>"${result_dir}/oversized-upload.stderr")

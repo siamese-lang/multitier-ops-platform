@@ -118,7 +118,7 @@
           --data-urlencode "description=Validate web workflow, status history, evidence upload/download, and failure-lab endpoints."
 
         location=$(awk 'BEGIN{IGNORECASE=1} /^Location:/ {print $2}' "${create_headers}" | tr -d '\r' | tail -n 1)
-        work_order_id="${location##*/}"
+        work_order_id="$(printf '%s\n' "${location##*/}" | sed -E 's/[;?].*$//')"
         if ! [[ "${work_order_id}" =~ ^[0-9]+$ ]]; then
           echo "could not parse work_order_id from Location header: ${location}" >&2
           exit 1

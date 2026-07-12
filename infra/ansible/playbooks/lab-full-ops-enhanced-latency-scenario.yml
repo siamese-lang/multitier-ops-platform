@@ -71,7 +71,7 @@
         read -r was_sleep_http_code was_sleep_time_total < <(curl -k -sS \
           -D "${was_sleep_headers}" \
           -o "${was_sleep_json}" \
-          -w '%{http_code} %{time_total}' \
+          -w '%{http_code} %{time_total}\n' \
           -H "X-Request-Id: ${request_prefix}-was-sleep" \
           "${base_url}/api/failure-lab/sleep?millis=${sleep_millis}")
 
@@ -139,7 +139,7 @@
         curl -k -sS \\
           -D "${db_sleep_headers}" \\
           -o "${db_sleep_json}" \\
-          -w '%{http_code} %{time_total}' \\
+          -w '%{http_code} %{time_total}\n' \\
           -H "X-Request-Id: ${request_prefix}-db-sleep" \\
           "${base_url}/api/failure-lab/db-sleep?millis=${db_sleep_millis}" \\
           > "${db_sleep_metrics}" 2> "${db_sleep_stderr}"

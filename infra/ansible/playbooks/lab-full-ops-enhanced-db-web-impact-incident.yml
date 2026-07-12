@@ -71,7 +71,7 @@
           set +e
           read -r http_code time_total < <(
             curl -k -sS -o "${output_file}" \
-              -w '%{http_code} %{time_total}' \
+              -w '%{http_code} %{time_total}\n' \
               -H "X-Request-Id: ${request_id}" \
               "${url}"
           )
@@ -194,7 +194,7 @@
               set +e
               read -r http_code time_total < <(
                 curl -k -sS -o "${output_file}" \
-                  -w '%{http_code} %{time_total}' \
+                  -w '%{http_code} %{time_total}\n' \
                   -H "X-Request-Id: ${request_id}" \
                   "${url}"
               )
@@ -315,7 +315,7 @@
           set +e
           read -r http_code time_total < <(
             curl -k -sS -o "${output_file}" \
-              -w '%{http_code} %{time_total}' \
+              -w '%{http_code} %{time_total}\n' \
               -H "X-Request-Id: ${request_id}" \
               "${url}"
           )
