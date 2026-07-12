@@ -1,0 +1,723 @@
+---
+- name: Collect observability baseline evidence for EC2 WEB/WAS/DB/Storage/Backup nodes
+  hosts: "web:app:db:storage:backup"
+  become: true
+  gather_facts: true
+
+  vars:
+    observability_project_name: "{{ project_name | default('multitier-ops-platform') }}"
+    observability_environment_name: "{{ environment_name | default('lab-full-ops') }}"
+    observability_remote_report_dir: /tmp/multitier-ops-platform/observability-baseline
+    observability_controller_evidence_dir: /tmp/observability-baseline-validation
+    observability_fetch_to_controller: true
+
+    observability_nginx_access_log: /var/log/nginx/ops_access.log
+    observability_nginx_error_log: /var/log/nginx/ops_error.log
+    observability_app_service_name: ops-sample-service
+    observability_db_service_name: postgresql
+    observability_nfs_service_names:
+      - nfs-kernel-server
+      - nfs-server
+
+  pre_tasks:
+    - name: Assert this play targets only operating evidence nodes
+      ansible.builtin.assert:
+        that:
+          - group_names | intersect(['web', 'app', 'db', 'storage', 'backup']) | length > 0
+        fail_msg: >-
+          observability-baseline.yml should target WEB/WAS/DB/Storage/Backup
+          operating nodes, not bastion-only or unrelated hosts.
+
+    - name: Ensure controller evidence directory exists when fetch is enabled
+      ansible.builtin.file:
+        path: "{{ observability_controller_evidence_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: observability_fetch_to_controller | bool
+
+  tasks:
+    - name: Ensure remote observability report directory exists
+      ansible.builtin.file:
+        path: "{{ observability_remote_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Collect node health and resource baseline
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "node_role={{ node_role | default('unknown') }}"
+        echo "node_tier={{ node_tier | default('unknown') }}"
+        echo "ansible_host={{ ansible_host | default('n/a') }}"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- hostname ---"
+        hostname
+        echo
+        echo "--- kernel ---"
+        uname -a
+        echo
+        echo "--- uptime ---"
+        uptime
+        echo
+        echo "--- memory_free_m ---"
+        free -m
+        echo
+        echo "--- filesystem_df_h ---"
+        df -h
+        echo
+        echo "--- filesystem_df_i ---"
+        df -i
+        echo
+        echo "--- listening_tcp_ports ---"
+        ss -lntp || true
+        echo
+        echo "--- failed_systemd_units ---"
+        systemctl --failed --no-pager || true
+      args:
+        executable: /bin/bash
+      register: observability_node_baseline
+      changed_when: false
+
+    - name: Write node baseline report on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/node-baseline-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_node_baseline.stdout }}\n"
+
+    - name: Fetch node baseline report to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/node-baseline-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Collect WEB tier Nginx log and service evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "tier=web"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- nginx_is_active ---"
+        systemctl is-active nginx || true
+        echo
+        echo "--- nginx_status ---"
+        systemctl status nginx --no-pager || true
+        echo
+        echo "--- nginx_listening_ports ---"
+        ss -lntp | grep -E '(:80|:443)' || true
+        echo
+        echo "--- nginx_access_log_tail ---"
+        tail -n 120 {{ observability_nginx_access_log }} 2>/dev/null || true
+        echo
+        echo "--- nginx_error_log_tail ---"
+        tail -n 120 {{ observability_nginx_error_log }} 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: observability_web_evidence
+      changed_when: false
+      when: "'web' in group_names"
+
+    - name: Write WEB tier evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/service-baseline-web-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_web_evidence.stdout }}\n"
+      when: "'web' in group_names"
+
+    - name: Fetch WEB tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-web-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'web' in group_names"
+
+    - name: Collect WAS tier service and journal evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "tier=was"
+        echo "service={{ observability_app_service_name }}"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- app_is_active ---"
+        systemctl is-active {{ observability_app_service_name }} || true
+        echo
+        echo "--- app_status ---"
+        systemctl status {{ observability_app_service_name }} --no-pager || true
+        echo
+        echo "--- app_listening_port ---"
+        ss -lntp | grep ':8080' || true
+        echo
+        echo "--- app_journal_tail ---"
+        journalctl -u {{ observability_app_service_name }} -n 240 --no-pager || true
+        echo
+        echo "--- app_mounts_ops_sample ---"
+        findmnt | grep -E 'ops-sample|/mnt/ops-sample' || true
+      args:
+        executable: /bin/bash
+      register: observability_app_evidence
+      changed_when: false
+      when: "'app' in group_names"
+
+    - name: Write WAS tier evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/service-baseline-app-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_app_evidence.stdout }}\n"
+      when: "'app' in group_names"
+
+    - name: Fetch WAS tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-app-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'app' in group_names"
+
+    - name: Collect DB tier PostgreSQL service and log evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "tier=db"
+        echo "service={{ observability_db_service_name }}"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- postgresql_is_active ---"
+        systemctl is-active {{ observability_db_service_name }} || true
+        echo
+        echo "--- postgresql_status ---"
+        systemctl status {{ observability_db_service_name }} --no-pager || true
+        echo
+        echo "--- postgresql_port ---"
+        ss -lntp | grep ':5432' || true
+        echo
+        echo "--- postgresql_journal_tail ---"
+        journalctl -u {{ observability_db_service_name }} -n 240 --no-pager || true
+        echo
+        echo "--- postgresql_log_tail ---"
+        latest_log="$(ls -1 /var/log/postgresql/postgresql-*.log 2>/dev/null | tail -n 1 || true)"
+        if [ -n "${latest_log}" ]; then
+          echo "latest_log=${latest_log}"
+          tail -n 160 "${latest_log}"
+        else
+          echo "latest_log=not_found"
+        fi
+        echo
+        echo "--- postgresql_disk ---"
+        df -h /var/lib/postgresql 2>/dev/null || df -h
+      args:
+        executable: /bin/bash
+      register: observability_db_evidence
+      changed_when: false
+      when: "'db' in group_names"
+
+    - name: Write DB tier evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/service-baseline-db-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_db_evidence.stdout }}\n"
+      when: "'db' in group_names"
+
+    - name: Fetch DB tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-db-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'db' in group_names"
+
+    - name: Collect Storage tier NFS and filesystem evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "tier=storage"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- nfs_service_state ---"
+        for svc in {{ observability_nfs_service_names | join(' ') }}; do
+          echo "service=${svc} state=$(systemctl is-active "${svc}" 2>/dev/null || true)"
+        done
+        echo
+        echo "--- nfs_status ---"
+        systemctl status nfs-kernel-server --no-pager 2>/dev/null || systemctl status nfs-server --no-pager 2>/dev/null || true
+        echo
+        echo "--- exportfs_v ---"
+        exportfs -v || true
+        echo
+        echo "--- ops_sample_filesystem ---"
+        df -h /srv/ops-sample 2>/dev/null || true
+        df -i /srv/ops-sample 2>/dev/null || true
+        echo
+        echo "--- nfs_journal_tail ---"
+        journalctl -u nfs-kernel-server -n 160 --no-pager 2>/dev/null || journalctl -u nfs-server -n 160 --no-pager 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: observability_storage_evidence
+      changed_when: false
+      when: "'storage' in group_names"
+
+    - name: Write Storage tier evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/service-baseline-storage-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_storage_evidence.stdout }}\n"
+      when: "'storage' in group_names"
+
+    - name: Fetch Storage tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-storage-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'storage' in group_names"
+
+    - name: Collect Backup/Ops tier artifact and job-log visibility evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "tier=backup"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- backup_disk ---"
+        df -h
+        echo
+        echo "--- backup_artifact_dirs ---"
+        ls -lah /srv/ops-backup /srv/ops-restore 2>/dev/null || true
+        echo
+        echo "--- backup_processes ---"
+        ps aux | grep -E 'pg_dump|pg_restore|restic' | grep -v grep || true
+        echo
+        echo "--- backup_journal_tail ---"
+        journalctl -n 240 --no-pager || true
+      args:
+        executable: /bin/bash
+      register: observability_backup_evidence
+      changed_when: false
+      when: "'backup' in group_names"
+
+    - name: Write Backup/Ops tier evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/service-baseline-backup-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_backup_evidence.stdout }}\n"
+      when: "'backup' in group_names"
+
+    - name: Fetch Backup/Ops tier evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/service-baseline-backup-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when:
+        - observability_fetch_to_controller | bool
+        - "'backup' in group_names"
+
+- name: Validate request-path observability through Nginx
+  hosts: web
+  become: true
+  gather_facts: false
+
+  vars:
+    observability_remote_report_dir: /tmp/multitier-ops-platform/observability-baseline
+    observability_controller_evidence_dir: /tmp/observability-baseline-validation
+    observability_fetch_to_controller: true
+    observability_request_prefix: observability-baseline
+    observability_base_url: https://127.0.0.1
+    observability_nginx_access_log: /var/log/nginx/ops_access.log
+    observability_nginx_error_log: /var/log/nginx/ops_error.log
+    observability_app_service_name: ops-sample-service
+    observability_consistency_work_order_id: 6
+    observability_consistency_evidence_id: 1
+    observability_run_consistency_probe: true
+
+  pre_tasks:
+    - name: Assert WEB inventory group exists for request-path validation
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: Request-path observability validation must run from nginx-01 in the web group.
+
+  tasks:
+    - name: Ensure remote observability report directory exists on WEB node
+      ansible.builtin.file:
+        path: "{{ observability_remote_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Probe health, readiness, DB-backed API, and optional DB/file consistency path
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_file="{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.tsv"
+        report_file="{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.txt"
+        : > "${result_file}"
+
+        run_probe() {
+          request_id="$1"
+          endpoint="$2"
+          url="$3"
+          tmp_body="$(mktemp)"
+
+          set +e
+          read -r http_code time_total size_download < <(
+            curl -k -sS -o "${tmp_body}" \
+              -w "%{http_code} %{time_total} %{size_download}" \
+              -H "X-Request-Id: ${request_id}" \
+              "${url}"
+          )
+          curl_rc=$?
+          set -e
+
+          if [ "${curl_rc}" -eq 0 ]; then
+            printf '%s\t%s\t%s\t%s\t%s\tok\n' "${request_id}" "${endpoint}" "${http_code}" "${time_total}" "${size_download}" >> "${result_file}"
+          else
+            printf '%s\t%s\t%s\t%s\t%s\tcurl_rc_%s\n' "${request_id}" "${endpoint}" "${http_code:-000}" "${time_total:-0}" "${size_download:-0}" "${curl_rc}" >> "${result_file}"
+          fi
+
+          rm -f "${tmp_body}"
+        }
+
+        run_probe "{{ observability_request_prefix }}-healthz" "healthz" "{{ observability_base_url }}/healthz"
+        run_probe "{{ observability_request_prefix }}-readyz" "readyz" "{{ observability_base_url }}/readyz"
+        run_probe "{{ observability_request_prefix }}-summary" "summary" "{{ observability_base_url }}/api/work-orders/summary"
+
+        if [ "{{ observability_run_consistency_probe | bool | lower }}" = "true" ]; then
+          run_probe "{{ observability_request_prefix }}-consistency" "consistency" "{{ observability_base_url }}/api/work-orders/{{ observability_consistency_work_order_id }}/evidence-files/{{ observability_consistency_evidence_id }}/consistency"
+        fi
+
+        {
+          echo "project={{ project_name | default('multitier-ops-platform') }}"
+          echo "environment={{ environment_name | default('lab-full-ops') }}"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "request_prefix={{ observability_request_prefix }}"
+          echo "base_url={{ observability_base_url }}"
+          echo "collected_at=$(date -Is)"
+          echo
+          echo "--- request_probe_tsv ---"
+          cat "${result_file}"
+          echo
+          echo "--- nginx_access_log_matching_request_prefix ---"
+          grep "{{ observability_request_prefix }}" {{ observability_nginx_access_log }} 2>/dev/null | tail -n 80 || true
+          echo
+          echo "--- nginx_error_log_tail ---"
+          tail -n 120 {{ observability_nginx_error_log }} 2>/dev/null || true
+        } > "${report_file}"
+
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      register: observability_request_path_report
+      changed_when: false
+
+    - name: Capture app journal around request-path validation window
+      ansible.builtin.shell: |
+        set -euo pipefail
+        report_file="{{ observability_remote_report_dir }}/app-journal-correlated-{{ inventory_hostname }}.txt"
+        {
+          echo "source_app={{ inventory_hostname }}"
+          echo "source_web={{ ansible_play_hosts | first }}"
+          echo "service={{ observability_app_service_name }}"
+          echo "collected_at=$(date -Is)"
+          echo
+          echo "--- app_journal_matching_request_prefix_or_tail ---"
+          journalctl -u {{ observability_app_service_name }} -n 300 --no-pager | grep "{{ observability_request_prefix }}" || journalctl -u {{ observability_app_service_name }} -n 160 --no-pager || true
+        } > "${report_file}"
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['app'] | default([]) }}"
+      register: observability_app_journal_correlation
+      changed_when: false
+      failed_when: false
+
+    - name: Fetch WEB request-path report to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Fetch WEB request-path TSV to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/request-path-{{ inventory_hostname }}.tsv"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Show request-path observability report
+      ansible.builtin.debug:
+        var: observability_request_path_report.stdout_lines
+
+- name: Optionally run controlled DB service incident for observability evidence
+  hosts: web
+  become: true
+  gather_facts: false
+
+  vars:
+    observability_remote_report_dir: /tmp/multitier-ops-platform/observability-baseline
+    observability_controller_evidence_dir: /tmp/observability-baseline-validation
+    observability_fetch_to_controller: true
+    observability_run_db_service_incident: false
+    observability_request_prefix: observability-db-service-incident
+    observability_base_url: https://127.0.0.1
+    observability_db_service_name: postgresql
+    observability_app_service_name: ops-sample-service
+    observability_nginx_access_log: /var/log/nginx/ops_access.log
+    observability_nginx_error_log: /var/log/nginx/ops_error.log
+
+  pre_tasks:
+    - name: Resolve DB incident target
+      ansible.builtin.set_fact:
+        observability_db_target: "{{ groups['db'][0] | default('db-primary-01') }}"
+      when: observability_run_db_service_incident | bool
+
+    - name: Assert DB incident prerequisites when enabled
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - groups['db'] | length > 0
+          - groups['app'] is defined
+          - groups['app'] | length > 0
+        fail_msg: DB service incident evidence requires db and app inventory groups.
+      when: observability_run_db_service_incident | bool
+
+  tasks:
+    - name: Run controlled PostgreSQL service outage and recovery evidence block
+      when: observability_run_db_service_incident | bool
+      block:
+        - name: Capture healthy readiness before DB service incident
+          ansible.builtin.command: "curl -k -fsS {{ observability_base_url }}/readyz"
+          register: observability_pre_incident_ready
+          changed_when: false
+
+        - name: Stop PostgreSQL service on DB target
+          ansible.builtin.service:
+            name: "{{ observability_db_service_name }}"
+            state: stopped
+          delegate_to: "{{ observability_db_target }}"
+
+        - name: Confirm PostgreSQL service is not active during incident
+          ansible.builtin.shell: "systemctl is-active {{ observability_db_service_name }} || true"
+          delegate_to: "{{ observability_db_target }}"
+          register: observability_db_stopped_state
+          changed_when: false
+          failed_when: observability_db_stopped_state.stdout == 'active'
+
+        - name: Allow application dependency checks to observe DB outage
+          ansible.builtin.pause:
+            seconds: 3
+
+        - name: Probe service paths during DB outage
+          ansible.builtin.shell: |
+            set -euo pipefail
+            result_file="{{ observability_remote_report_dir }}/incident-db-service-unavailable.tsv"
+            : > "${result_file}"
+
+            run_probe() {
+              request_id="$1"
+              endpoint="$2"
+              url="$3"
+              tmp_body="$(mktemp)"
+
+              set +e
+              read -r http_code time_total size_download < <(
+                curl -k -sS -o "${tmp_body}" \
+                  -w "%{http_code} %{time_total} %{size_download}" \
+                  -H "X-Request-Id: ${request_id}" \
+                  "${url}"
+              )
+              curl_rc=$?
+              set -e
+
+              printf '%s\t%s\t%s\t%s\t%s\tcurl_rc_%s\n' "${request_id}" "${endpoint}" "${http_code:-000}" "${time_total:-0}" "${size_download:-0}" "${curl_rc}" >> "${result_file}"
+              rm -f "${tmp_body}"
+            }
+
+            run_probe "{{ observability_request_prefix }}-healthz" "healthz" "{{ observability_base_url }}/healthz"
+            run_probe "{{ observability_request_prefix }}-readyz" "readyz" "{{ observability_base_url }}/readyz"
+            run_probe "{{ observability_request_prefix }}-summary" "summary" "{{ observability_base_url }}/api/work-orders/summary"
+
+            cat "${result_file}"
+          args:
+            executable: /bin/bash
+          register: observability_incident_probes
+          changed_when: false
+          failed_when: false
+
+        - name: Capture Nginx logs during DB service incident
+          ansible.builtin.shell: |
+            set -euo pipefail
+            report_file="{{ observability_remote_report_dir }}/incident-nginx-db-service-unavailable-{{ inventory_hostname }}.txt"
+            {
+              echo "--- nginx_access_matching_incident_prefix ---"
+              grep "{{ observability_request_prefix }}" {{ observability_nginx_access_log }} 2>/dev/null | tail -n 80 || true
+              echo
+              echo "--- nginx_error_tail ---"
+              tail -n 120 {{ observability_nginx_error_log }} 2>/dev/null || true
+            } > "${report_file}"
+            cat "${report_file}"
+          args:
+            executable: /bin/bash
+          register: observability_incident_nginx_logs
+          changed_when: false
+
+        - name: Capture app journal during DB service incident
+          ansible.builtin.shell: |
+            set -euo pipefail
+            report_file="{{ observability_remote_report_dir }}/incident-app-journal-db-service-unavailable-{{ inventory_hostname }}.txt"
+            {
+              echo "source_app={{ inventory_hostname }}"
+              echo "service={{ observability_app_service_name }}"
+              echo "collected_at=$(date -Is)"
+              echo
+              journalctl -u {{ observability_app_service_name }} -n 240 --no-pager || true
+            } > "${report_file}"
+            cat "${report_file}"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['app'] }}"
+          register: observability_incident_app_journals
+          changed_when: false
+
+        - name: Capture DB service state during incident
+          ansible.builtin.shell: |
+            set -euo pipefail
+            report_file="{{ observability_remote_report_dir }}/incident-db-service-state-{{ inventory_hostname }}.txt"
+            {
+              echo "source_db={{ inventory_hostname }}"
+              echo "service={{ observability_db_service_name }}"
+              echo "collected_at=$(date -Is)"
+              echo
+              echo "--- service_state ---"
+              systemctl is-active {{ observability_db_service_name }} || true
+              echo
+              echo "--- service_status ---"
+              systemctl status {{ observability_db_service_name }} --no-pager || true
+              echo
+              echo "--- port_5432 ---"
+              ss -lntp | grep ':5432' || true
+              echo
+              echo "--- db_journal_tail ---"
+              journalctl -u {{ observability_db_service_name }} -n 160 --no-pager || true
+            } > "${report_file}"
+            cat "${report_file}"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ observability_db_target }}"
+          register: observability_incident_db_state
+          changed_when: false
+
+      always:
+        - name: Restart PostgreSQL service after optional DB incident
+          ansible.builtin.service:
+            name: "{{ observability_db_service_name }}"
+            state: started
+          delegate_to: "{{ observability_db_target | default(groups['db'][0] | default('db-primary-01')) }}"
+          when: observability_run_db_service_incident | bool
+
+        - name: Wait for DB service port after recovery
+          ansible.builtin.wait_for:
+            host: "{{ hostvars[observability_db_target].ansible_host | default(hostvars[observability_db_target].inventory_hostname) }}"
+            port: 5432
+            timeout: 60
+          delegate_to: "{{ observability_db_target | default(groups['db'][0] | default('db-primary-01')) }}"
+          when: observability_run_db_service_incident | bool
+
+        - name: Capture post-recovery readiness through Nginx
+          ansible.builtin.command: "curl -k -fsS {{ observability_base_url }}/readyz"
+          register: observability_post_incident_ready
+          changed_when: false
+          retries: 20
+          delay: 3
+          until: observability_post_incident_ready.rc == 0
+          when: observability_run_db_service_incident | bool
+
+        - name: Write DB service incident report on WEB node
+          ansible.builtin.copy:
+            dest: "{{ observability_remote_report_dir }}/incident-report-db-service-unavailable.md"
+            mode: "0644"
+            content: |
+              # Incident report: DB service unavailable
+
+              ## Scenario
+              PostgreSQL service was intentionally stopped on {{ observability_db_target | default('db-primary-01') }} during a planned observability validation window.
+
+              ## User-visible symptom
+              DB-dependent readiness or API paths degraded while process-level WEB/WAS paths could still be inspected.
+
+              ## Evidence collected
+              - WEB request probes: {{ observability_incident_probes.stdout | default('not_collected') }}
+              - Nginx log evidence: {{ observability_incident_nginx_logs.stdout | default('not_collected') }}
+              - App journal evidence: {{ observability_incident_app_journals.results | default([]) | length }} app journal result(s)
+              - DB service state: {{ observability_incident_db_state.stdout | default('not_collected') }}
+
+              ## Failure class narrowed to
+              DB service unavailable while db-primary-01 host remained reachable.
+
+              ## Why WEB was not the root cause
+              Nginx request evidence was collected from the WEB tier during the incident window.
+
+              ## Why WAS was not the root cause
+              Application journal and readiness evidence pointed to dependency failure rather than missing process evidence.
+
+              ## Why DB service state was the root cause
+              PostgreSQL service state on the DB node was intentionally inactive during the incident window.
+
+              ## Recovery action
+              PostgreSQL service was restarted.
+
+              ## Post-recovery check
+              readyz_after_recovery_rc={{ observability_post_incident_ready.rc | default('not_collected') }}
+
+              ## Remaining gaps
+              This does not prove HA, automatic failover, alerting maturity, or SLO/SLA compliance.
+          when: observability_run_db_service_incident | bool
+
+        - name: Fetch DB service incident probe TSV to controller evidence directory
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/incident-db-service-unavailable.tsv"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
+          when:
+            - observability_run_db_service_incident | bool
+            - observability_fetch_to_controller | bool
+
+        - name: Fetch DB service incident Nginx report to controller evidence directory
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/incident-nginx-db-service-unavailable-{{ inventory_hostname }}.txt"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
+          when:
+            - observability_run_db_service_incident | bool
+            - observability_fetch_to_controller | bool
+
+        - name: Fetch DB service incident report to controller evidence directory
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/incident-report-db-service-unavailable.md"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
+          when:
+            - observability_run_db_service_incident | bool
+            - observability_fetch_to_controller | bool
