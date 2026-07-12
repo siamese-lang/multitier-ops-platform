@@ -1,0 +1,110 @@
+---
+- name: Configure node exporter baseline for EC2 WEB/WAS/DB/Storage/Backup nodes
+  hosts: "web:app:db:storage:backup"
+  become: true
+  gather_facts: true
+
+  vars:
+    observability_project_name: "{{ project_name | default('multitier-ops-platform') }}"
+    observability_environment_name: "{{ environment_name | default('lab-full-ops') }}"
+    observability_node_exporter_package_name: prometheus-node-exporter
+    observability_node_exporter_service_name: prometheus-node-exporter
+    observability_node_exporter_port: 9100
+    observability_remote_report_dir: /tmp/multitier-ops-platform/observability-node-exporter
+    observability_controller_evidence_dir: /tmp/observability-node-exporter-validation
+    observability_fetch_to_controller: true
+
+  pre_tasks:
+    - name: Assert this play targets only operating evidence nodes
+      ansible.builtin.assert:
+        that:
+          - group_names | intersect(['web', 'app', 'db', 'storage', 'backup']) | length > 0
+        fail_msg: >-
+          observability-node-exporter-baseline.yml should target WEB/WAS/DB/Storage/Backup
+          operating nodes, not bastion-only or unrelated hosts.
+
+    - name: Ensure controller evidence directory exists when fetch is enabled
+      ansible.builtin.file:
+        path: "{{ observability_controller_evidence_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: observability_fetch_to_controller | bool
+
+  tasks:
+    - name: Install node exporter package
+      ansible.builtin.apt:
+        name: "{{ observability_node_exporter_package_name }}"
+        state: present
+        update_cache: true
+
+    - name: Ensure node exporter service is enabled and started
+      ansible.builtin.service:
+        name: "{{ observability_node_exporter_service_name }}"
+        enabled: true
+        state: started
+
+    - name: Ensure remote node exporter report directory exists
+      ansible.builtin.file:
+        path: "{{ observability_remote_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Collect node exporter metric endpoint evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        metrics_file="$(mktemp)"
+        trap 'rm -f "${metrics_file}"' EXIT
+
+        curl -fsS "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics" > "${metrics_file}"
+
+        echo "project={{ observability_project_name }}"
+        echo "environment={{ observability_environment_name }}"
+        echo "inventory_hostname={{ inventory_hostname }}"
+        echo "node_role={{ node_role | default('unknown') }}"
+        echo "node_tier={{ node_tier | default('unknown') }}"
+        echo "ansible_host={{ ansible_host | default('n/a') }}"
+        echo "collected_at=$(date -Is)"
+        echo
+        echo "--- node_exporter_service_state ---"
+        systemctl is-active "{{ observability_node_exporter_service_name }}" || true
+        echo
+        echo "--- node_exporter_service_status ---"
+        systemctl status "{{ observability_node_exporter_service_name }}" --no-pager || true
+        echo
+        echo "--- node_exporter_listening_port ---"
+        ss -lntp | grep ':{{ observability_node_exporter_port }}' || true
+        echo
+        echo "--- node_exporter_metric_endpoint ---"
+        echo "metric_endpoint=http://127.0.0.1:{{ observability_node_exporter_port }}/metrics"
+        echo "metric_line_count=$(wc -l < "${metrics_file}")"
+        echo
+        echo "--- sampled_metrics ---"
+        grep -E '^(node_uname_info|node_boot_time_seconds|node_cpu_seconds_total|node_memory_MemAvailable_bytes|node_filesystem_avail_bytes|node_network_receive_bytes_total)' "${metrics_file}" | head -n 80 || true
+      args:
+        executable: /bin/bash
+      register: observability_node_exporter_evidence
+      changed_when: false
+
+    - name: Write node exporter evidence on remote host
+      ansible.builtin.copy:
+        dest: "{{ observability_remote_report_dir }}/node-exporter-baseline-{{ inventory_hostname }}.txt"
+        mode: "0644"
+        content: "{{ observability_node_exporter_evidence.stdout }}\n"
+
+    - name: Fetch node exporter evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/node-exporter-baseline-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Show node exporter metric endpoint summary
+      ansible.builtin.debug:
+        msg:
+          - "node={{ inventory_hostname }}"
+          - "service={{ observability_node_exporter_service_name }}"
+          - "port={{ observability_node_exporter_port }}"
+          - "report=node-exporter-baseline-{{ inventory_hostname }}.txt"
