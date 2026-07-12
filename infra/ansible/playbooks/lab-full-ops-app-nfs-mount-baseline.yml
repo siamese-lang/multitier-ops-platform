@@ -20,13 +20,28 @@
         update_cache: true
       when: lab_full_ops_app_install_nfs_client_packages | bool
 
-    - name: Ensure app NFS mount directory exists
+    - name: Check whether app NFS mount path is already mounted
+      ansible.builtin.command: "mountpoint -q {{ lab_full_ops_app_nfs_mount_path }}"
+      register: lab_full_ops_app_nfs_pre_mountpoint
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure local app NFS mount directory exists before mounting
       ansible.builtin.file:
         path: "{{ lab_full_ops_app_nfs_mount_path }}"
         state: directory
         owner: "{{ lab_full_ops_app_nfs_mount_owner }}"
         group: "{{ lab_full_ops_app_nfs_mount_group }}"
         mode: "{{ lab_full_ops_app_nfs_mount_mode }}"
+      when: lab_full_ops_app_nfs_pre_mountpoint.rc != 0
+
+    - name: Skip ownership changes when the NFS root is already mounted
+      ansible.builtin.debug:
+        msg: >-
+          {{ lab_full_ops_app_nfs_mount_path }} is already a mounted NFS path.
+          Ownership and mode are controlled on nfs-01 export root and are not
+          changed from the app node to avoid root_squash chown failures.
+      when: lab_full_ops_app_nfs_pre_mountpoint.rc == 0
 
     - name: Ensure app NFS mount is present in fstab
       ansible.builtin.lineinfile:
@@ -44,6 +59,7 @@
       failed_when:
         - lab_full_ops_app_nfs_mount_command.rc != 0
         - "'already mounted' not in lab_full_ops_app_nfs_mount_command.stderr"
+      when: lab_full_ops_app_nfs_pre_mountpoint.rc != 0
 
     - name: Verify app NFS mountpoint
       ansible.builtin.command: "mountpoint -q {{ lab_full_ops_app_nfs_mount_path }}"
