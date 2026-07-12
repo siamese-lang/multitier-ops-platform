@@ -1,0 +1,306 @@
+---
+- name: Validate enhanced WAS sleep vs DB sleep latency scenario through nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    latency_scenario_request_prefix: lab-full-ops-latency-scenario
+    latency_scenario_report_dir: /tmp/multitier-ops-platform
+    latency_scenario_result_dir: "{{ latency_scenario_report_dir }}/lab-full-ops-latency-scenario"
+    latency_scenario_report_file: "{{ latency_scenario_report_dir }}/lab-full-ops-latency-scenario-{{ inventory_hostname }}.txt"
+    latency_scenario_base_url: https://127.0.0.1
+    latency_scenario_was_sleep_millis: 5000
+    latency_scenario_db_sleep_millis: 5000
+    latency_scenario_db_host: db-primary-01
+    latency_scenario_app_log_host: "{{ groups['app'][0] | default('app-01') }}"
+    latency_scenario_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert dependent hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - latency_scenario_db_host in groups['db']
+          - groups['app'] is defined
+          - latency_scenario_app_log_host in groups['app']
+        fail_msg: "db-primary-01 and at least one app host must exist before latency scenario validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this latency scenario validation from nginx-01 through the web inventory group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook compares WAS-only long requests and DB-backed slow requests through Nginx."
+          - "The DB-backed request is sampled with pg_stat_activity while it is still running."
+          - "Run only during one planned lab-full-ops runtime validation window."
+          - "Do not run Terraform apply/destroy just for this playbook alone."
+
+  tasks:
+    - name: Ensure latency scenario result directory exists
+      ansible.builtin.file:
+        path: "{{ latency_scenario_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Run WAS-only sleep request through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ latency_scenario_result_dir }}"
+        base_url="{{ latency_scenario_base_url }}"
+        request_prefix="{{ latency_scenario_request_prefix }}"
+        sleep_millis="{{ latency_scenario_was_sleep_millis | int }}"
+
+        failure_lab_html="${result_dir}/failure-lab.html"
+        was_sleep_json="${result_dir}/was-sleep.json"
+        was_sleep_headers="${result_dir}/was-sleep.headers"
+        was_sleep_metrics="${result_dir}/was-sleep.metrics"
+        parsed_kv="${result_dir}/was-sleep-parsed.env"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-failure-lab-page" \
+          "${base_url}/ops/failure-lab" \
+          > "${failure_lab_html}"
+        grep -q "Failure Lab" "${failure_lab_html}"
+
+        read -r was_sleep_http_code was_sleep_time_total < <(curl -k -sS \
+          -D "${was_sleep_headers}" \
+          -o "${was_sleep_json}" \
+          -w '%{http_code} %{time_total}' \
+          -H "X-Request-Id: ${request_prefix}-was-sleep" \
+          "${base_url}/api/failure-lab/sleep?millis=${sleep_millis}")
+
+        was_sleep_status=$(python3 -c "import json; print(json.load(open('${was_sleep_json}'))['status'])")
+        was_sleep_scenario=$(python3 -c "import json; print(json.load(open('${was_sleep_json}'))['scenario'])")
+        was_sleep_bounded_millis=$(python3 -c "import json; print(json.load(open('${was_sleep_json}'))['boundedMillis'])")
+        was_sleep_duration_ms=$(python3 -c "import json; print(json.load(open('${was_sleep_json}'))['durationMs'])")
+        was_sleep_thread=$(python3 -c "import json; print(json.load(open('${was_sleep_json}')).get('thread', 'n/a'))")
+
+        test "${was_sleep_http_code}" = "200"
+        test "${was_sleep_status}" = "ok"
+        test "${was_sleep_scenario}" = "was_sleep"
+        test "${was_sleep_bounded_millis}" = "${sleep_millis}"
+
+        python3 - "${was_sleep_duration_ms}" "${sleep_millis}" "${was_sleep_time_total}" <<'PY'
+        import sys
+        duration_ms = float(sys.argv[1])
+        expected_ms = float(sys.argv[2])
+        time_total_s = float(sys.argv[3])
+        if duration_ms < expected_ms * 0.80:
+            raise SystemExit(f"app duration too short for WAS sleep: {duration_ms} < {expected_ms}")
+        if time_total_s < (expected_ms / 1000.0) * 0.80:
+            raise SystemExit(f"curl time_total too short for WAS sleep: {time_total_s}")
+        PY
+
+        cat > "${was_sleep_metrics}" <<EOF
+        was_sleep_http_code=${was_sleep_http_code}
+        was_sleep_time_total=${was_sleep_time_total}
+        was_sleep_status=${was_sleep_status}
+        was_sleep_scenario=${was_sleep_scenario}
+        was_sleep_bounded_millis=${was_sleep_bounded_millis}
+        was_sleep_duration_ms=${was_sleep_duration_ms}
+        was_sleep_thread=${was_sleep_thread}
+        EOF
+
+        cat "${was_sleep_metrics}" > "${parsed_kv}"
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: latency_was_sleep
+      changed_when: true
+
+    - name: Start DB-backed sleep request through Nginx in background
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ latency_scenario_result_dir }}"
+        base_url="{{ latency_scenario_base_url }}"
+        request_prefix="{{ latency_scenario_request_prefix }}"
+        db_sleep_millis="{{ latency_scenario_db_sleep_millis | int }}"
+
+        db_sleep_script="${result_dir}/run-db-sleep.sh"
+        db_sleep_json="${result_dir}/db-sleep.json"
+        db_sleep_headers="${result_dir}/db-sleep.headers"
+        db_sleep_metrics="${result_dir}/db-sleep.metrics"
+        db_sleep_stderr="${result_dir}/db-sleep.stderr"
+        db_sleep_rc="${result_dir}/db-sleep.rc"
+        db_sleep_pid_file="${result_dir}/db-sleep.pid"
+
+        rm -f "${db_sleep_json}" "${db_sleep_headers}" "${db_sleep_metrics}" "${db_sleep_stderr}" "${db_sleep_rc}" "${db_sleep_pid_file}"
+
+        cat > "${db_sleep_script}" <<EOF
+        #!/usr/bin/env bash
+        set +e
+        curl -k -sS \\
+          -D "${db_sleep_headers}" \\
+          -o "${db_sleep_json}" \\
+          -w '%{http_code} %{time_total}' \\
+          -H "X-Request-Id: ${request_prefix}-db-sleep" \\
+          "${base_url}/api/failure-lab/db-sleep?millis=${db_sleep_millis}" \\
+          > "${db_sleep_metrics}" 2> "${db_sleep_stderr}"
+        echo "\$?" > "${db_sleep_rc}"
+        EOF
+        chmod +x "${db_sleep_script}"
+        nohup bash "${db_sleep_script}" >/dev/null 2>&1 &
+        db_sleep_pid=$!
+        echo "${db_sleep_pid}" > "${db_sleep_pid_file}"
+        echo "db_sleep_pid=${db_sleep_pid}"
+        echo "db_sleep_pid_file=${db_sleep_pid_file}"
+      args:
+        executable: /bin/bash
+      register: latency_db_sleep_start
+      changed_when: true
+
+    - name: Give DB-backed sleep request time to reach PostgreSQL
+      ansible.builtin.pause:
+        seconds: 1
+
+    - name: Sample PostgreSQL pg_stat_activity while DB-backed sleep is running
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ latency_scenario_db_name }} -AtF $'\t' -c \
+          "select pid, state, wait_event_type, wait_event, now() - query_start as age, query from pg_stat_activity where datname = '{{ latency_scenario_db_name }}' and query like '%pg_sleep%' order by query_start desc limit 5;"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ latency_scenario_db_host }}"
+      register: latency_pg_stat_activity_sample
+      changed_when: false
+      failed_when: latency_pg_stat_activity_sample.rc != 0
+
+    - name: Wait for DB-backed sleep request to finish and parse response
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ latency_scenario_result_dir }}"
+        db_sleep_json="${result_dir}/db-sleep.json"
+        db_sleep_metrics="${result_dir}/db-sleep.metrics"
+        db_sleep_stderr="${result_dir}/db-sleep.stderr"
+        db_sleep_rc="${result_dir}/db-sleep.rc"
+        parsed_kv="${result_dir}/db-sleep-parsed.env"
+
+        for _ in $(seq 1 90); do
+          if [[ -f "${db_sleep_rc}" ]]; then
+            break
+          fi
+          sleep 1
+        done
+
+        test -f "${db_sleep_rc}"
+        db_sleep_curl_rc=$(cat "${db_sleep_rc}")
+        read -r db_sleep_http_code db_sleep_time_total < "${db_sleep_metrics}"
+
+        test "${db_sleep_curl_rc}" = "0"
+        test "${db_sleep_http_code}" = "200"
+
+        db_sleep_status=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['status'])")
+        db_sleep_scenario=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['scenario'])")
+        db_sleep_bounded_millis=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['boundedMillis'])")
+        db_sleep_duration_ms=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['durationMs'])")
+        db_sleep_query=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['db']['query'])")
+
+        test "${db_sleep_status}" = "ok"
+        test "${db_sleep_scenario}" = "db_sleep"
+        test "${db_sleep_bounded_millis}" = "{{ latency_scenario_db_sleep_millis | int }}"
+        test "${db_sleep_query}" = "select pg_sleep(?)"
+
+        python3 - "${db_sleep_duration_ms}" "{{ latency_scenario_db_sleep_millis | int }}" "${db_sleep_time_total}" <<'PY'
+        import sys
+        duration_ms = float(sys.argv[1])
+        expected_ms = float(sys.argv[2])
+        time_total_s = float(sys.argv[3])
+        if duration_ms < expected_ms * 0.80:
+            raise SystemExit(f"app duration too short for DB sleep: {duration_ms} < {expected_ms}")
+        if time_total_s < (expected_ms / 1000.0) * 0.80:
+            raise SystemExit(f"curl time_total too short for DB sleep: {time_total_s}")
+        PY
+
+        cat > "${parsed_kv}" <<EOF
+        db_sleep_curl_rc=${db_sleep_curl_rc}
+        db_sleep_http_code=${db_sleep_http_code}
+        db_sleep_time_total=${db_sleep_time_total}
+        db_sleep_status=${db_sleep_status}
+        db_sleep_scenario=${db_sleep_scenario}
+        db_sleep_bounded_millis=${db_sleep_bounded_millis}
+        db_sleep_duration_ms=${db_sleep_duration_ms}
+        db_sleep_query=${db_sleep_query}
+        db_sleep_stderr=${db_sleep_stderr}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: latency_db_sleep
+      changed_when: true
+
+    - name: Extract latency scenario values
+      ansible.builtin.set_fact:
+        latency_was_sleep_http_code: "{{ latency_was_sleep.stdout | regex_search('was_sleep_http_code=([^\n]+)', '\\1') | first }}"
+        latency_was_sleep_time_total: "{{ latency_was_sleep.stdout | regex_search('was_sleep_time_total=([^\n]+)', '\\1') | first }}"
+        latency_was_sleep_duration_ms: "{{ latency_was_sleep.stdout | regex_search('was_sleep_duration_ms=([^\n]+)', '\\1') | first }}"
+        latency_was_sleep_thread: "{{ latency_was_sleep.stdout | regex_search('was_sleep_thread=([^\n]+)', '\\1') | first }}"
+        latency_db_sleep_http_code: "{{ latency_db_sleep.stdout | regex_search('db_sleep_http_code=([^\n]+)', '\\1') | first }}"
+        latency_db_sleep_time_total: "{{ latency_db_sleep.stdout | regex_search('db_sleep_time_total=([^\n]+)', '\\1') | first }}"
+        latency_db_sleep_duration_ms: "{{ latency_db_sleep.stdout | regex_search('db_sleep_duration_ms=([^\n]+)', '\\1') | first }}"
+        latency_db_sleep_query: "{{ latency_db_sleep.stdout | regex_search('db_sleep_query=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert latency scenario basic response evidence
+      ansible.builtin.assert:
+        that:
+          - latency_was_sleep_http_code == '200'
+          - latency_db_sleep_http_code == '200'
+          - latency_db_sleep_query == 'select pg_sleep(?)'
+        fail_msg: "WAS sleep or DB sleep response evidence was not valid. Check {{ latency_scenario_result_dir }} on nginx-01."
+
+    - name: Read latency scenario Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ latency_scenario_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 50 || true"
+      register: latency_nginx_access_log
+      changed_when: false
+
+    - name: Read latency scenario app journald evidence
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ latency_scenario_request_prefix }}' | tail -n 50 || true"
+      delegate_to: "{{ latency_scenario_app_log_host }}"
+      register: latency_app_log
+      changed_when: false
+
+    - name: Write latency scenario validation report
+      ansible.builtin.copy:
+        dest: "{{ latency_scenario_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          validation=enhanced-latency-scenario
+          request_prefix={{ latency_scenario_request_prefix }}
+          base_url={{ latency_scenario_base_url }}
+          was_sleep_millis={{ latency_scenario_was_sleep_millis }}
+          was_sleep_http_code={{ latency_was_sleep_http_code }}
+          was_sleep_time_total={{ latency_was_sleep_time_total }}
+          was_sleep_duration_ms={{ latency_was_sleep_duration_ms }}
+          was_sleep_thread={{ latency_was_sleep_thread }}
+          db_sleep_millis={{ latency_scenario_db_sleep_millis }}
+          db_sleep_http_code={{ latency_db_sleep_http_code }}
+          db_sleep_time_total={{ latency_db_sleep_time_total }}
+          db_sleep_duration_ms={{ latency_db_sleep_duration_ms }}
+          db_sleep_query={{ latency_db_sleep_query }}
+          pg_stat_activity_pg_sleep_sample={{ latency_pg_stat_activity_sample.stdout | default('n/a') }}
+          interpretation=was_sleep_is_was_thread_delay_db_sleep_is_db_dependency_delay
+          nginx_access_log_sample={{ latency_nginx_access_log.stdout | default('n/a') }}
+          app_log_host={{ latency_scenario_app_log_host }}
+          app_log_sample={{ latency_app_log.stdout | default('n/a') }}
+          result_dir={{ latency_scenario_result_dir }}
+
+    - name: Display latency scenario validation report
+      ansible.builtin.command: "cat {{ latency_scenario_report_file }}"
+      register: latency_scenario_report
+      changed_when: false
+
+    - name: Show latency scenario validation report
+      ansible.builtin.debug:
+        var: latency_scenario_report.stdout_lines
