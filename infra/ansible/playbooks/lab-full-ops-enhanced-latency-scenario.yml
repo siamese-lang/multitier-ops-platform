@@ -164,7 +164,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         sudo -u postgres psql -d {{ latency_scenario_db_name }} -AtF $'\t' -c \
-          "select pid, state, wait_event_type, wait_event, now() - query_start as age, query from pg_stat_activity where datname = '{{ latency_scenario_db_name }}' and query like '%pg_sleep%' order by query_start desc limit 5;"
+          "select pid, state, wait_event_type, wait_event, now() - query_start as age, query from pg_stat_activity where datname = '{{ latency_scenario_db_name }}' and pid <> pg_backend_pid() and query like '%pg_sleep%' order by query_start desc limit 5;"
       args:
         executable: /bin/bash
       delegate_to: "{{ latency_scenario_db_host }}"
