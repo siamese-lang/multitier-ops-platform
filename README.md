@@ -107,6 +107,8 @@ preserved backup artifact
    - claim-to-evidence map
 4. docs/00-project/interview-explanation-notes.md
    - 30-second/2-minute explanation and interview Q&A
+5. docs/00-project/submission-description-notes.md
+   - application-form and portfolio URL wording
 ```
 
 ## 핵심 evidence 문서
@@ -137,6 +139,7 @@ docs/04-evidence/observability-alert-validation-2026-07-12.md
 ```text
 docs/00-project/portfolio-summary.md
 docs/00-project/interview-explanation-notes.md
+docs/00-project/submission-description-notes.md
 ```
 
 새 대화에서 이어갈 때는 아래 문서를 먼저 읽습니다.
@@ -148,6 +151,7 @@ docs/00-project/workload-strategy.md
 docs/00-project/next-chat-handoff.md
 docs/00-project/portfolio-summary.md
 docs/00-project/interview-explanation-notes.md
+docs/00-project/submission-description-notes.md
 docs/04-evidence/evidence-index.md
 ```
 
