@@ -13,9 +13,11 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 ```text
 Phase 0. lab-runtime smoke test: completed
 Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
-Phase 2. lab-full-ops storage/backup/observability expansion: next
+Phase 2A. lab-full-ops storage validation: completed
+Phase 2B. lab-full-ops backup/restore baseline: next
+Phase 2C. lab-full-ops observability baseline: next after backup path
 Phase 3. restore-lab recovery validation: future, required
-Phase 4. advanced incident reports and failover: future, optional after core recovery
+Phase 4. advanced incident reports and failover: optional after core recovery
 ```
 
 ## Phase 0. lab-runtime smoke test — completed
@@ -109,61 +111,144 @@ Do not keep adding similar lab-full-min drills unless they clearly unlock Phase 
 The minimum WEB/WAS/DB operating story is already strong enough.
 ```
 
-## Phase 2. lab-full-ops — next
+## Phase 2A. lab-full-ops storage validation — completed
 
 Purpose:
 
 ```text
-Extend the validated WEB/WAS/DB environment into a fuller operating environment
-with file storage, backup, observability, and load generation tiers.
+Extend the validated WEB/WAS/DB path with a storage tier and prove that
+application-level DB metadata and NFS-backed file objects can be checked together.
 ```
 
-Target topology:
+Validated reduced topology:
 
 ```text
 [Public Subnet]
 - bastion-01
 - nginx-01
-- optionally nginx-02 later
 
 [Private App Subnet]
 - app-01
-- app-02
-- optionally app-03 later
 
 [Private DB Subnet]
 - db-primary-01
-- optionally db-standby-01 later
 
 [Private Storage Subnet]
 - nfs-01
 
 [Private Ops Subnet]
-- mon-01
-- log-01
 - backup-01
-- loadgen-01
+
+Temporary validation support:
+- NAT Gateway enabled only for package installation during the batched runtime window
 ```
 
-Recommended implementation order:
+Validated operating path:
 
 ```text
-1. Design lab-full-ops topology and tier responsibilities
-2. Add Terraform support for nfs-01, backup-01, mon-01, log-01, loadgen-01
-3. Add Ansible baseline control path for new nodes
-4. Configure nfs-01 or filesystem storage
-5. Add application/file endpoint or test harness for file metadata consistency
-6. Run file storage failure drill
-7. Configure pg_dump and restic backup workflow
-8. Validate restore into restore-lab
-9. Add Prometheus/Grafana/Loki for evidence collection
-10. Write incident reports using logs and metrics
+operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
+                                 |
+                                 -> nfs-01:/srv/ops-sample/files
 ```
 
-First recommended next issue:
+Completed build items:
 
 ```text
-[DESIGN] lab-full-ops 파일저장소·백업·관측성 확장 설계
+Terraform reduced lab-full-ops profile
+lab-full-ops inventory/control path
+PostgreSQL primary wrapper for lab-full-ops
+nfs-01 export baseline
+app-01 NFS client mount baseline
+ops-sample-service lab-full-ops deployment
+Nginx reverse proxy wrapper for lab-full-ops
+work-order evidence smoke playbook
+```
+
+Completed validation scenarios:
+
+```text
+NFS mount verification
+NFS write-probe verification
+work order creation through Nginx
+work-order evidence file creation through Nginx
+PostgreSQL metadata row verification
+NFS file object size and SHA-256 verification
+application consistency endpoint verification
+Nginx request-id access log verification
+Terraform destroy after evidence collection
+```
+
+Runtime findings that were fixed:
+
+```text
+NFS export root permission mismatch under root_squash
+app NFS mount playbook idempotency failure on already-mounted NFS root
+stale jar artifact that lacked WorkOrderEvidence classes
+systemd unit environment/path labeling mismatch
+```
+
+Key evidence document:
+
+```text
+docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
+```
+
+Important boundary:
+
+```text
+Do not repeat the full AWS runtime window for small follow-up PRs.
+Use syntax/static checks until a new backup, restore, observability, or incident scenario requires runtime evidence.
+```
+
+## Phase 2B. lab-full-ops backup baseline — next
+
+Purpose:
+
+```text
+Create a backup path for the already validated DB/file workload.
+The goal is not merely backup creation; the goal is to prepare restore validation.
+```
+
+Recommended next implementation order:
+
+```text
+1. Define backup artifact boundaries for PostgreSQL metadata and NFS file objects.
+2. Add pg_dump baseline for db-primary-01.
+3. Add restic or equivalent file backup baseline for nfs-01.
+4. Store backup artifacts on backup-01 or an explicitly documented backup target.
+5. Generate a new evidence dataset through the work-order evidence flow.
+6. Capture backup command output and artifact inventory.
+7. Do not call the backup phase complete until restore-lab can verify recovery.
+```
+
+Minimum required evidence:
+
+```text
+pg_dump command output
+NFS file backup command output
+backup artifact inventory
+metadata/file checksum mapping
+cleanup/destroy policy
+```
+
+## Phase 2C. lab-full-ops observability baseline — next after backup path
+
+Purpose:
+
+```text
+Collect logs and metrics that support incident diagnosis.
+The goal is not a pretty dashboard; the goal is evidence for operating decisions.
+```
+
+Recommended scope:
+
+```text
+node metrics for nginx-01, app-01, db-primary-01, nfs-01, backup-01
+Nginx access/error log visibility
+ops-sample-service journald/request-id log visibility
+PostgreSQL service/log visibility
+NFS/storage host metrics
+one incident report that uses logs or metrics to narrow the failure class
 ```
 
 ## Phase 3. restore-lab — required future milestone
@@ -177,13 +262,13 @@ Prove that backup artifacts can restore a working system in a separate environme
 Target flow:
 
 ```text
-Create lab-full data
+Create lab-full-ops data
 Create PostgreSQL dump
-Create file backup with restic
-Destroy lab-full resources
+Create file backup
+Destroy lab-full-ops resources
 Create restore-lab resources
 Restore DB and file backup
-Validate DB rows, file checksum, and HTTP download
+Validate DB rows, file checksum, and HTTP/API consistency
 Document recovery time and recovery gaps
 ```
 
@@ -191,11 +276,11 @@ Required evidence:
 
 ```text
 pg_dump command output
-restic snapshot output
+restic or file-backup snapshot output
 Terraform destroy and new apply
 restore command output
 checksum comparison
-HTTP endpoint verification
+HTTP/API endpoint verification
 incident/recovery report
 ```
 
@@ -215,7 +300,7 @@ Loki log query-based incident diagnosis
 p95/p99 latency comparison before/after tuning
 ```
 
-These should be added only after Phase 2 and Phase 3 produce evidence.
+These should be added only after Phase 2 backup/observability and Phase 3 restore evidence exist.
 
 ## Work that should stop now
 
@@ -223,6 +308,7 @@ Avoid the following unless a clear evidence gap is identified:
 
 ```text
 more lab-full-min drills with the same pattern
+repeating the storage validation runtime window without a new scenario
 OpenKoda UI or feature work
 Terraform-only refactoring without an operating scenario
 GitHub issue/PR churn without validation value
