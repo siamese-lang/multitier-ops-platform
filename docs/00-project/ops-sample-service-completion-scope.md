@@ -1,18 +1,18 @@
 # ops-sample-service completion scope
 
-This document redefines `ops-sample-service` from a thin controlled workload into a lightweight web operations service that can be explained clearly in interviews.
+This document defines `ops-sample-service` as the lightweight web operations service used by this portfolio.
 
-## Why this change is needed
+## Why this change was needed
 
-The infrastructure, backup, restore, and observability evidence already proves meaningful operating behaviors.
+The infrastructure, backup, restore, and observability evidence already proved meaningful operating behaviors.
 
-However, the operated service must also be clear enough to answer this interview question:
+However, the operated service also needed to be clear enough to answer this interview question:
 
 ```text
 What service did you operate?
 ```
 
-The previous framing, `controlled workload`, is technically accurate but too defensive for portfolio presentation. The service does not need to become a production-grade business system, but it must provide enough web-based workflow to connect WEB/WAS operating issues to service behavior.
+The previous framing, `controlled workload`, was technically accurate but too defensive for portfolio presentation. The service did not need to become a production-grade business system, but it needed enough web-based workflow to connect WEB/WAS operating issues to service behavior.
 
 ## Target service identity
 
@@ -34,6 +34,13 @@ Interview-safe description:
 작업 요청과 증빙 파일을 다루는 경량 웹 업무 서비스를 운영 대상으로 구성했습니다. 사용자는 작업 요청을 등록하고, 운영자는 상태를 변경하며, 조치 메모와 증빙 파일을 남길 수 있습니다. PostgreSQL에는 작업 요청과 파일 메타데이터를 저장하고, NFS에는 실제 첨부파일을 저장하도록 분리했습니다. 이 서비스를 Nginx, Spring Boot WAS, PostgreSQL, NFS 환경에 배포하고 WEB/WAS 운영 문제와 백업·복구 절차를 검증했습니다.
 ```
 
+Important distinction:
+
+```text
+Repository implementation baseline: completed.
+Enhanced AWS runtime validation: pending.
+```
+
 ## What this service is not
 
 Do not describe it as:
@@ -49,55 +56,64 @@ large-scale enterprise web application
 
 It is intentionally a lightweight service. Its purpose is to make WEB/WAS/DB/file-storage operating scenarios realistic enough to analyze.
 
-## Minimum user-facing workflow
+## Implemented user-facing workflow
 
-The service must support this basic workflow:
+The service supports this basic workflow in code:
 
 ```text
 1. A requester creates an operations work order.
 2. An operator opens the work order detail page.
 3. The operator changes the work order status.
-4. The operator adds an action memo.
+4. The operator leaves an action memo during the status change.
 5. The operator uploads an evidence file.
-6. The service stores metadata in PostgreSQL and the file object on NFS.
+6. The service stores metadata in PostgreSQL and the file object on the configured file storage path.
 7. The service can download the evidence file.
-8. The service can show work order history and file consistency status.
+8. The service can show work order history, audit logs, and file consistency links.
 ```
 
 This is enough to explain what the service does without claiming full business-system maturity.
 
-## Minimum web pages
+## Implemented web pages and endpoints
 
 Avoid a SPA or heavy frontend. Server-rendered HTML with Spring Boot and Thymeleaf is sufficient.
 
-Required pages:
+Implemented pages:
 
 | Page | Path | Purpose |
 |---|---|---|
-| Work order list | `GET /work-orders` | Show work orders, status, requester, assignee, updated time, file count |
-| Work order detail | `GET /work-orders/{id}` | Show description, status, action history, evidence files |
+| Root redirect | `GET /` | Redirect to `/work-orders` |
+| Work order list | `GET /work-orders` | Show work orders, status summary, and recent audit logs |
+| Work order detail | `GET /work-orders/{id}` | Show description, status history, evidence files, and operational links |
 | New work order | `GET /work-orders/new` | Show create form |
 | Create work order | `POST /work-orders` | Insert work order row |
-| Change status | `POST /work-orders/{id}/status` | Change status and create event history |
-| Add action memo | `POST /work-orders/{id}/events` | Add operator note or action record |
+| Change status | `POST /work-orders/{id}/status` | Change status and create event/audit history |
 | Upload evidence | `POST /work-orders/{id}/evidence` | Store file and metadata |
-| Download evidence | `GET /evidence/{id}/download` | Download stored file object |
-| Operations dashboard | `GET /ops` | Show version, readiness, DB status, file storage status |
-| Failure lab | `GET /ops/failure-lab` | Trigger or link operating scenarios |
+| Download evidence | `GET /work-orders/{id}/evidence/{evidenceId}/download` | Download stored file object |
+| Failure lab | `GET /ops/failure-lab` | Link operating scenarios and diagnostic endpoints |
 
-Existing JSON APIs can remain for validation playbooks. The web pages make the service explainable to human reviewers.
+Implemented failure-lab APIs:
 
-## Minimum data model
+```text
+GET /api/failure-lab/sleep?millis=3000
+GET /api/failure-lab/db-sleep?millis=3000
+GET /api/failure-lab/file-storage-check
+GET /api/failure-lab/upload-limits
+```
 
-The existing DB/file consistency model should be extended, not replaced.
+Existing JSON APIs remain for validation playbooks. The web pages make the service explainable to human reviewers.
 
-### `work_orders`
+## Implemented data model
+
+The existing DB/file consistency model was extended rather than replaced.
+
+### `ops_work_orders`
 
 ```text
 id
 title
 description
 status
+priority
 requester
 assignee
 created_at
@@ -114,7 +130,7 @@ FAILED
 CANCELLED
 ```
 
-### `work_order_events`
+### `ops_work_order_events`
 
 ```text
 id
@@ -127,32 +143,24 @@ actor
 created_at
 ```
 
-Event types:
+Current event behavior includes creation/seed and status transition events.
 
-```text
-CREATED
-STATUS_CHANGED
-ACTION_MEMO_ADDED
-EVIDENCE_UPLOADED
-EVIDENCE_DOWNLOADED
-RECOVERY_VALIDATED
-```
-
-### `evidence_files`
+### `ops_work_order_evidence_files`
 
 ```text
 id
 work_order_id
-original_filename
+file_name
 storage_path
-content_type
 size_bytes
 sha256
-uploaded_by
-uploaded_at
+created_by_node
+created_at
 ```
 
-### `operation_audit_logs`
+The same metadata table is used for deterministic generated evidence files and user-provided uploaded files.
+
+### `ops_operation_audit_logs`
 
 ```text
 id
@@ -177,28 +185,35 @@ The service must not add features for their own sake. Each feature must support 
 | Work order list and detail | Nginx -> WAS -> DB request path validation |
 | Work order creation | DB insert, transaction, request log validation |
 | Status change | DB update, event history, audit trail validation |
-| Evidence upload | Nginx upload limit, Spring multipart limit, NFS write, DB/file consistency |
+| Evidence upload | Nginx upload limit, Spring multipart limit, NFS/file write, DB/file consistency |
 | Evidence download | Nginx timeout, NFS read failure, missing file object |
-| Operations dashboard | readiness, dependency visibility, artifact version check |
-| Slow report endpoint | Nginx timeout, Tomcat thread occupancy, HikariCP waiting |
-| Slow query endpoint | PostgreSQL slow query and index comparison |
-| Failure lab | controlled DB/file/latency incidents for evidence collection |
+| Failure-lab sleep endpoint | Nginx timeout and WAS long-request/thread occupation evidence |
+| Failure-lab DB sleep endpoint | DB dependency latency and connection-path observation |
+| Failure-lab file storage check | file-storage readiness and permission evidence |
+| Failure-lab upload-limit endpoint | WEB/WAS upload-size configuration inspection |
 
 ## WEB/WAS operations completion criteria
 
-The service becomes portfolio-ready when these can be demonstrated:
+Repository implementation now satisfies these code-level criteria:
 
 ```text
 1. A reviewer can open a web page and understand what the service does.
 2. Work orders can be created, listed, opened, and updated.
-3. Evidence files can be uploaded, stored on NFS, and downloaded.
-4. PostgreSQL metadata and NFS file objects can be checked together.
+3. Evidence files can be uploaded, stored, and downloaded.
+4. PostgreSQL metadata and file objects can be checked together.
 5. Request IDs appear in HTTP responses and logs.
 6. /healthz and /readyz remain separate.
-7. /ops shows service version and dependency status.
-8. A slow request can be used to reproduce timeout/thread behavior.
-9. A DB-backed slow path can be used for slow-query or connection-pool analysis.
-10. The existing backup/restore validation can be rerun against the enhanced service model.
+7. A slow request endpoint exists for timeout/thread behavior.
+8. A DB-backed slow path exists for DB dependency latency analysis.
+```
+
+Still pending as runtime/evidence criteria:
+
+```text
+1. Validate enhanced web workflow through Nginx on AWS runtime.
+2. Validate upload/download through Nginx -> WAS -> NFS/file storage -> PostgreSQL metadata.
+3. Validate failure-lab sleep/db-sleep paths with Nginx and app logs.
+4. Refresh backup/restore validation against the enhanced service model.
 ```
 
 ## Implementation boundaries
@@ -231,48 +246,20 @@ Use basic validation instead of complex business rules.
 
 These simplifications are acceptable because the project is a WEB/WAS operations portfolio, not an application-development portfolio.
 
-## Codex-friendly PR sequence
+## Completed Codex-friendly PR sequence
 
-Implement in small PRs so the project does not drift.
-
-### PR 1. Service domain and schema
+Implemented service PRs:
 
 ```text
-Add or extend tables for work_orders, work_order_events, evidence_files, operation_audit_logs.
-Add seed data.
-Keep existing API compatibility where possible.
-Update service naming from controlled workload to lightweight web operations service.
+PR #141 [APP] Add work order domain and schema
+PR #142 [APP] Add basic web workflow pages
+PR #143 [APP] Add user evidence upload and download workflow
+PR #144 [APP] Add WEB/WAS failure lab endpoints
 ```
 
-### PR 2. Basic web UI
+## Next PR sequence
 
-```text
-Add Thymeleaf or simple server-rendered HTML pages:
-- work order list
-- work order detail
-- new work order form
-- status change form
-- action memo form
-```
-
-### PR 3. Evidence upload/download workflow
-
-```text
-Add web upload/download flow.
-Preserve NFS storage path, size, and SHA-256 metadata.
-Show file consistency state on the work order detail page.
-```
-
-### PR 4. Operations dashboard and failure lab
-
-```text
-Add /ops page.
-Add /ops/failure-lab page.
-Expose slow request, slow query, DB dependency, and file-storage checks.
-Do not add production admin features.
-```
-
-### PR 5. WEB/WAS scenario validation
+### PR 5. WEB/WAS scenario validation prep
 
 ```text
 Add or update Ansible validation for:
@@ -282,15 +269,22 @@ Add or update Ansible validation for:
 - download evidence
 - status change
 - request ID log trace
-- slow endpoint timeout evidence
+- slow endpoint response evidence
 ```
 
-### PR 6. Recovery evidence refresh
+### PR 6. Runtime validation window
 
 ```text
-Run one planned runtime validation window only after static implementation is ready.
-Validate backup and restore against the enhanced service model.
+Run one planned runtime validation window only after static validation prep is ready.
+Validate enhanced web workflow and failure-lab paths.
 Collect evidence and destroy once.
+```
+
+### PR 7. Recovery evidence refresh
+
+```text
+Validate backup and restore against the enhanced service model.
+Refresh evidence docs and evidence index.
 ```
 
 ## Existing evidence reuse
@@ -318,21 +312,25 @@ recovery validation using enhanced tables
 WEB/WAS timeout or slow request evidence
 ```
 
-## New project positioning after completion
+## New project positioning after implementation
 
-Use this positioning after the service enhancement is implemented and validated:
+Use this positioning for repository implementation status:
+
+```text
+작업 요청·증빙 파일 관리형 경량 웹 업무 서비스를 Nginx, Spring Boot WAS, PostgreSQL, NFS, backup, Prometheus 계층으로 분리 구성하기 위한 서비스 구현 baseline을 완료했고, WEB/WAS 운영 문제와 백업·복구 절차를 검증할 runtime evidence를 갱신하는 단계입니다.
+```
+
+Use the stronger positioning only after enhanced runtime evidence exists:
 
 ```text
 작업 요청·증빙 파일 관리형 경량 웹 업무 서비스를 Nginx, Spring Boot WAS, PostgreSQL, NFS, backup, Prometheus 계층으로 분리 구성하고, WEB/WAS 운영 문제와 백업·복구 절차를 evidence로 검증한 프로젝트
 ```
 
-Do not use this stronger positioning until the web pages, upload/download workflow, status history, and refreshed validation evidence exist.
-
 ## Current status
 
 ```text
-Status: design approved for next implementation phase
-Runtime required now: no
-Next default work: implement service domain and schema statically
-AWS runtime: only after implementation is ready for one planned validation window
+Status: service implementation baseline completed
+Runtime required now: not for docs/static prep
+Next default work: enhanced-service Ansible validation prep
+AWS runtime: only after validation prep is ready for one planned validation window
 ```
