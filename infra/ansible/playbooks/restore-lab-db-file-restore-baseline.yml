@@ -235,7 +235,10 @@
 
         test -d "${restored_source}"
         find "${target_mount}" -mindepth 1 -exec rm -rf {} +
-        (cd "${restored_source}" && tar -cf - .) | (cd "${target_mount}" && tar -xf -)
+        # The restore target is an NFS export with root_squash enabled. Preserve
+        # content, paths, size, and checksums, but do not attempt to replay source
+        # EC2 uid/gid or permission bits onto the restore-lab NFS target.
+        (cd "${restored_source}" && tar -cf - .) | (cd "${target_mount}" && tar --no-same-owner --no-same-permissions -xf -)
 
         find "${target_mount}" -type f -printf '%P\t%s\t%TY-%Tm-%TdT%TH:%TM:%TS%TZ\n' | sort > "{{ lab_full_ops_restore_input_dir }}/restored-file-inventory.txt"
         restored_file_count=$(wc -l < "{{ lab_full_ops_restore_input_dir }}/restored-file-inventory.txt" | tr -d ' ')
