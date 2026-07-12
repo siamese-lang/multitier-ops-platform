@@ -1,0 +1,177 @@
+---
+- name: Configure Prometheus scrape baseline for EC2 operating nodes
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    observability_project_name: "{{ project_name | default('multitier-ops-platform') }}"
+    observability_environment_name: "{{ environment_name | default('lab-full-ops') }}"
+    observability_remote_report_dir: /tmp/multitier-ops-platform/prometheus-baseline
+    observability_controller_evidence_dir: /tmp/observability-prometheus-validation
+    observability_fetch_to_controller: true
+
+    prometheus_service_name: prometheus
+    prometheus_config_file: /etc/prometheus/prometheus.yml
+    prometheus_listen_url: http://127.0.0.1:9090
+    prometheus_node_exporter_port: 9100
+    prometheus_scrape_interval: 15s
+    prometheus_evaluation_interval: 15s
+    prometheus_target_groups:
+      - web
+      - app
+      - db
+      - storage
+      - backup
+
+  pre_tasks:
+    - name: Assert this play runs on the monitoring tier
+      ansible.builtin.assert:
+        that:
+          - "'monitoring' in group_names"
+        fail_msg: >-
+          observability-prometheus-scrape-baseline.yml must run on mon-01
+          in the monitoring group. Enable the monitoring node and populate
+          inventories/lab-full-ops/hosts.yml before running this playbook.
+
+    - name: Assert scrape target groups exist
+      ansible.builtin.assert:
+        that:
+          - groups[item] is defined
+          - groups[item] | length > 0
+        fail_msg: "Missing or empty Prometheus scrape target group: {{ item }}"
+      loop: "{{ prometheus_target_groups }}"
+
+    - name: Ensure controller evidence directory exists when fetch is enabled
+      ansible.builtin.file:
+        path: "{{ observability_controller_evidence_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: observability_fetch_to_controller | bool
+
+  tasks:
+    - name: Install Prometheus package
+      ansible.builtin.apt:
+        name: prometheus
+        state: present
+        update_cache: true
+
+    - name: Ensure Prometheus service is enabled and started
+      ansible.builtin.service:
+        name: "{{ prometheus_service_name }}"
+        enabled: true
+        state: started
+
+    - name: Build Prometheus node exporter target list
+      ansible.builtin.set_fact:
+        prometheus_node_exporter_targets: "{{ prometheus_node_exporter_targets | default([]) + [hostvars[item].ansible_host ~ ':' ~ prometheus_node_exporter_port] }}"
+      loop: "{{ prometheus_target_groups | map('extract', groups) | flatten }}"
+
+    - name: Write Prometheus scrape configuration
+      ansible.builtin.copy:
+        dest: "{{ prometheus_config_file }}"
+        mode: "0644"
+        backup: true
+        content: |
+          global:
+            scrape_interval: {{ prometheus_scrape_interval }}
+            evaluation_interval: {{ prometheus_evaluation_interval }}
+
+          scrape_configs:
+            - job_name: "node-exporter-operating-nodes"
+              static_configs:
+                - targets:
+          {% for target in prometheus_node_exporter_targets | sort %}
+                    - "{{ target }}"
+          {% endfor %}
+                  labels:
+                    project: "{{ observability_project_name }}"
+                    environment: "{{ observability_environment_name }}"
+                    topology: "ec2-web-was-db-storage-backup"
+      notify: Restart Prometheus
+
+    - name: Validate Prometheus configuration syntax
+      ansible.builtin.command: "promtool check config {{ prometheus_config_file }}"
+      register: prometheus_config_check
+      changed_when: false
+
+    - name: Flush Prometheus restart before runtime evidence checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Prometheus HTTP endpoint
+      ansible.builtin.uri:
+        url: "{{ prometheus_listen_url }}/-/ready"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: prometheus_ready_check
+      retries: 20
+      delay: 3
+      until: prometheus_ready_check.status == 200
+      changed_when: false
+
+    - name: Collect Prometheus scrape evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        report_file="{{ observability_remote_report_dir }}/prometheus-scrape-baseline-{{ inventory_hostname }}.txt"
+        mkdir -p "{{ observability_remote_report_dir }}"
+        {
+          echo "project={{ observability_project_name }}"
+          echo "environment={{ observability_environment_name }}"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "ansible_host={{ ansible_host | default('n/a') }}"
+          echo "node_role={{ node_role | default('monitoring') }}"
+          echo "node_tier={{ node_tier | default('private-ops') }}"
+          echo "collected_at=$(date -Is)"
+          echo
+          echo "--- prometheus_service_state ---"
+          systemctl is-active {{ prometheus_service_name }} || true
+          echo
+          echo "--- prometheus_status ---"
+          systemctl status {{ prometheus_service_name }} --no-pager || true
+          echo
+          echo "--- prometheus_listening_port ---"
+          ss -lntp | grep ':9090' || true
+          echo
+          echo "--- prometheus_config_check ---"
+          promtool check config {{ prometheus_config_file }} || true
+          echo
+          echo "--- prometheus_targets_configured ---"
+        {% for target in prometheus_node_exporter_targets | sort %}
+          echo "{{ target }}"
+        {% endfor %}
+          echo
+          echo "--- prometheus_ready ---"
+          curl -fsS {{ prometheus_listen_url }}/-/ready || true
+          echo
+          echo "--- prometheus_targets_api ---"
+          curl -fsS {{ prometheus_listen_url }}/api/v1/targets || true
+          echo
+          echo "--- prometheus_up_query ---"
+          curl -G -fsS {{ prometheus_listen_url }}/api/v1/query --data-urlencode 'query=up' || true
+        } > "${report_file}"
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      register: prometheus_scrape_report
+      changed_when: false
+
+    - name: Fetch Prometheus scrape evidence to controller evidence directory
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/prometheus-scrape-baseline-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Show Prometheus scrape evidence report
+      ansible.builtin.debug:
+        var: prometheus_scrape_report.stdout_lines
+
+  handlers:
+    - name: Restart Prometheus
+      ansible.builtin.service:
+        name: "{{ prometheus_service_name }}"
+        state: restarted
