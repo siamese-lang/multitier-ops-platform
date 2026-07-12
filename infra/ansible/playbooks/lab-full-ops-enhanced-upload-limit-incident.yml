@@ -1,0 +1,383 @@
+---
+- name: Validate enhanced evidence upload failure isolation through nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    upload_incident_request_prefix: lab-full-ops-upload-limit-incident
+    upload_incident_report_dir: /tmp/multitier-ops-platform
+    upload_incident_result_dir: "{{ upload_incident_report_dir }}/lab-full-ops-upload-limit-incident"
+    upload_incident_report_file: "{{ upload_incident_report_dir }}/lab-full-ops-upload-limit-incident-{{ inventory_hostname }}.txt"
+    upload_incident_base_url: https://127.0.0.1
+    upload_incident_normal_size_bytes: 65536
+    upload_incident_oversized_size_bytes: 12582912
+    upload_incident_db_host: db-primary-01
+    upload_incident_storage_host: nfs-01
+    upload_incident_app_log_host: "{{ groups['app'][0] | default('app-01') }}"
+    upload_incident_nfs_export_root: /srv/ops-sample/files
+    upload_incident_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert dependent hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - upload_incident_db_host in groups['db']
+          - groups['storage'] is defined
+          - upload_incident_storage_host in groups['storage']
+          - groups['app'] is defined
+          - upload_incident_app_log_host in groups['app']
+        fail_msg: "db-primary-01, nfs-01, and at least one app host must exist before upload incident validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this upload incident validation from nginx-01 through the web inventory group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook validates evidence upload failure isolation through Nginx."
+          - "It intentionally sends one oversized upload request and expects rejection."
+          - "Run only during one planned lab-full-ops runtime validation window."
+          - "Do not run Terraform apply/destroy just for this playbook alone."
+
+  tasks:
+    - name: Ensure upload incident validation result directory exists
+      ansible.builtin.file:
+        path: "{{ upload_incident_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate normal upload and oversized upload rejection through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ upload_incident_result_dir }}"
+        base_url="{{ upload_incident_base_url }}"
+        request_prefix="{{ upload_incident_request_prefix }}"
+        normal_size="{{ upload_incident_normal_size_bytes | int }}"
+        oversized_size="{{ upload_incident_oversized_size_bytes | int }}"
+
+        upload_limits_json="${result_dir}/upload-limits.json"
+        create_headers="${result_dir}/work-order-create.headers"
+        create_body="${result_dir}/work-order-create.html"
+        work_order_json="${result_dir}/work-order.json"
+        normal_file_name="normal-upload-limit-evidence.txt"
+        oversized_file_name="oversized-upload-limit-evidence.txt"
+        normal_file="${result_dir}/${normal_file_name}"
+        oversized_file="${result_dir}/${oversized_file_name}"
+        normal_upload_headers="${result_dir}/normal-upload.headers"
+        normal_upload_body="${result_dir}/normal-upload.html"
+        oversized_upload_headers="${result_dir}/oversized-upload.headers"
+        oversized_upload_body="${result_dir}/oversized-upload.html"
+        evidence_list_after_normal="${result_dir}/evidence-list-after-normal.json"
+        evidence_list_after_oversized="${result_dir}/evidence-list-after-oversized.json"
+        consistency_json="${result_dir}/normal-evidence-consistency.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-upload-limits" \
+          "${base_url}/api/failure-lab/upload-limits" \
+          > "${upload_limits_json}"
+        upload_max_file_size=$(python3 -c "import json; print(json.load(open('${upload_limits_json}'))['maxFileSize'])")
+        upload_max_request_size=$(python3 -c "import json; print(json.load(open('${upload_limits_json}'))['maxRequestSize'])")
+
+        read -r create_http_code create_time_total < <(curl -k -sS \
+          -D "${create_headers}" \
+          -o "${create_body}" \
+          -w '%{http_code} %{time_total}' \
+          -H "X-Request-Id: ${request_prefix}-create-work-order" \
+          -X POST "${base_url}/work-orders" \
+          --data-urlencode "title=Upload failure isolation validation" \
+          --data-urlencode "priority=HIGH" \
+          --data-urlencode "requester=service-desk" \
+          --data-urlencode "assignee=ops-admin" \
+          --data-urlencode "description=Validate normal upload, oversized upload rejection, and DB/NFS side effects.")
+        test "${create_http_code}" = "302"
+
+        location=$(awk 'BEGIN{IGNORECASE=1} /^Location:/ {print $2}' "${create_headers}" | tr -d '\r' | tail -n 1)
+        work_order_id="${location##*/}"
+        if ! [[ "${work_order_id}" =~ ^[0-9]+$ ]]; then
+          echo "could not parse work_order_id from Location header: ${location}" >&2
+          exit 1
+        fi
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-json" \
+          "${base_url}/api/work-orders/${work_order_id}" \
+          > "${work_order_json}"
+
+        python3 - "${normal_file}" "${normal_size}" <<'PY'
+        import pathlib
+        import sys
+        path = pathlib.Path(sys.argv[1])
+        size = int(sys.argv[2])
+        pattern = b"normal-upload-limit-validation\n"
+        path.write_bytes((pattern * ((size // len(pattern)) + 1))[:size])
+        PY
+        normal_expected_size=$(stat -c '%s' "${normal_file}")
+        normal_expected_sha256=$(sha256sum "${normal_file}" | awk '{print $1}')
+
+        read -r normal_upload_http_code normal_upload_time_total < <(curl -k -sS \
+          -D "${normal_upload_headers}" \
+          -o "${normal_upload_body}" \
+          -w '%{http_code} %{time_total}' \
+          -H "X-Request-Id: ${request_prefix}-normal-upload" \
+          -X POST "${base_url}/work-orders/${work_order_id}/evidence" \
+          -F "file=@${normal_file};filename=${normal_file_name}")
+        test "${normal_upload_http_code}" = "302"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-list-after-normal" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_after_normal}"
+
+        normal_values=$(python3 - "${evidence_list_after_normal}" "${normal_file_name}" <<'PY'
+        import json
+        import sys
+        rows = json.load(open(sys.argv[1]))["data"]
+        matches = [row for row in rows if row.get("fileName") == sys.argv[2]]
+        if not matches:
+            raise SystemExit(f"normal upload metadata not found: {sys.argv[2]}")
+        row = max(matches, key=lambda item: int(item["id"]))
+        print(f"normal_evidence_id={row['id']}")
+        print(f"normal_storage_path={row['storagePath']}")
+        print(f"normal_metadata_size_bytes={row['sizeBytes']}")
+        print(f"normal_metadata_sha256={row['sha256']}")
+        PY
+        )
+        eval "${normal_values}"
+        test "${normal_metadata_size_bytes}" = "${normal_expected_size}"
+        test "${normal_metadata_sha256}" = "${normal_expected_sha256}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-normal-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${normal_evidence_id}/consistency" \
+          > "${consistency_json}"
+        normal_consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
+        normal_consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
+        test "${normal_consistency_status}" = "consistent"
+        test "${normal_consistent}" = "true"
+
+        python3 - "${oversized_file}" "${oversized_size}" <<'PY'
+        import pathlib
+        import sys
+        path = pathlib.Path(sys.argv[1])
+        size = int(sys.argv[2])
+        chunk = b"oversized-upload-limit-validation\n" * 4096
+        written = 0
+        with path.open("wb") as fp:
+            while written < size:
+                part = chunk[: min(len(chunk), size - written)]
+                fp.write(part)
+                written += len(part)
+        PY
+        oversized_actual_size=$(stat -c '%s' "${oversized_file}")
+        oversized_expected_sha256=$(sha256sum "${oversized_file}" | awk '{print $1}')
+
+        set +e
+        oversized_curl_output=$(curl -k -sS \
+          -D "${oversized_upload_headers}" \
+          -o "${oversized_upload_body}" \
+          -w '%{http_code} %{time_total}' \
+          -H "X-Request-Id: ${request_prefix}-oversized-upload" \
+          -X POST "${base_url}/work-orders/${work_order_id}/evidence" \
+          -F "file=@${oversized_file};filename=${oversized_file_name}" 2>"${result_dir}/oversized-upload.stderr")
+        oversized_curl_rc=$?
+        set -e
+        oversized_http_code=$(awk '{print $1}' <<<"${oversized_curl_output}")
+        oversized_time_total=$(awk '{print $2}' <<<"${oversized_curl_output}")
+        if [[ -z "${oversized_http_code}" ]]; then
+          oversized_http_code="000"
+        fi
+        if [[ -z "${oversized_time_total}" ]]; then
+          oversized_time_total="n/a"
+        fi
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-list-after-oversized" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_after_oversized}"
+
+        oversized_match_count=$(python3 - "${evidence_list_after_oversized}" "${oversized_file_name}" <<'PY'
+        import json
+        import sys
+        rows = json.load(open(sys.argv[1]))["data"]
+        print(sum(1 for row in rows if row.get("fileName") == sys.argv[2]))
+        PY
+        )
+        test "${oversized_match_count}" = "0"
+
+        oversized_nginx_line=$(grep "${request_prefix}-oversized-upload" /var/log/nginx/ops_access.log | tail -n 1 || true)
+        if [[ "${oversized_http_code}" =~ ^4|^5 ]]; then
+          oversized_rejected=true
+        else
+          oversized_rejected=false
+        fi
+
+        if [[ "${oversized_http_code}" = "413" && "${oversized_nginx_line}" == *'upstream_status="-"'* ]]; then
+          failure_layer="WEB_NGINX_BODY_LIMIT"
+        elif [[ "${oversized_http_code}" =~ ^4|^5 && "${oversized_nginx_line}" == *'upstream_status="'* && "${oversized_nginx_line}" != *'upstream_status="-"'* ]]; then
+          failure_layer="WAS_OR_APPLICATION_MULTIPART_REJECTION"
+        elif [[ "${oversized_rejected}" = "true" ]]; then
+          failure_layer="REJECTED_BUT_LAYER_REQUIRES_LOG_REVIEW"
+        else
+          failure_layer="UNEXPECTED_NOT_REJECTED"
+        fi
+
+        test "${oversized_rejected}" = "true"
+
+        cat > "${parsed_kv}" <<EOF
+        work_order_id=${work_order_id}
+        upload_max_file_size=${upload_max_file_size}
+        upload_max_request_size=${upload_max_request_size}
+        normal_upload_http_code=${normal_upload_http_code}
+        normal_upload_time_total=${normal_upload_time_total}
+        normal_evidence_id=${normal_evidence_id}
+        normal_storage_path=${normal_storage_path}
+        normal_expected_size_bytes=${normal_expected_size}
+        normal_metadata_size_bytes=${normal_metadata_size_bytes}
+        normal_expected_sha256=${normal_expected_sha256}
+        normal_metadata_sha256=${normal_metadata_sha256}
+        normal_consistency_status=${normal_consistency_status}
+        normal_consistent=${normal_consistent}
+        oversized_file_name=${oversized_file_name}
+        oversized_size_bytes=${oversized_actual_size}
+        oversized_sha256=${oversized_expected_sha256}
+        oversized_curl_rc=${oversized_curl_rc}
+        oversized_http_code=${oversized_http_code}
+        oversized_time_total=${oversized_time_total}
+        oversized_metadata_match_count=${oversized_match_count}
+        oversized_rejected=${oversized_rejected}
+        failure_layer=${failure_layer}
+        result_dir=${result_dir}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: upload_incident_workflow
+      changed_when: true
+
+    - name: Extract upload incident values
+      ansible.builtin.set_fact:
+        upload_incident_work_order_id: "{{ upload_incident_workflow.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        upload_incident_max_file_size: "{{ upload_incident_workflow.stdout | regex_search('upload_max_file_size=([^\n]+)', '\\1') | first }}"
+        upload_incident_max_request_size: "{{ upload_incident_workflow.stdout | regex_search('upload_max_request_size=([^\n]+)', '\\1') | first }}"
+        upload_incident_normal_evidence_id: "{{ upload_incident_workflow.stdout | regex_search('normal_evidence_id=([^\n]+)', '\\1') | first }}"
+        upload_incident_normal_storage_path: "{{ upload_incident_workflow.stdout | regex_search('normal_storage_path=([^\n]+)', '\\1') | first }}"
+        upload_incident_normal_size_bytes: "{{ upload_incident_workflow.stdout | regex_search('normal_expected_size_bytes=([^\n]+)', '\\1') | first }}"
+        upload_incident_normal_sha256: "{{ upload_incident_workflow.stdout | regex_search('normal_expected_sha256=([^\n]+)', '\\1') | first }}"
+        upload_incident_oversized_file_name: "{{ upload_incident_workflow.stdout | regex_search('oversized_file_name=([^\n]+)', '\\1') | first }}"
+        upload_incident_oversized_size_bytes: "{{ upload_incident_workflow.stdout | regex_search('oversized_size_bytes=([^\n]+)', '\\1') | first }}"
+        upload_incident_oversized_http_code: "{{ upload_incident_workflow.stdout | regex_search('oversized_http_code=([^\n]+)', '\\1') | first }}"
+        upload_incident_oversized_match_count: "{{ upload_incident_workflow.stdout | regex_search('oversized_metadata_match_count=([^\n]+)', '\\1') | first }}"
+        upload_incident_failure_layer: "{{ upload_incident_workflow.stdout | regex_search('failure_layer=([^\n]+)', '\\1') | first }}"
+        upload_incident_result_dir: "{{ upload_incident_workflow.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert upload incident scenario classified expected rejection
+      ansible.builtin.assert:
+        that:
+          - upload_incident_oversized_http_code is match('^[45][0-9][0-9]$')
+          - upload_incident_oversized_match_count == '0'
+          - upload_incident_failure_layer != 'UNEXPECTED_NOT_REJECTED'
+        fail_msg: "Oversized upload was not rejected or produced metadata. Check {{ upload_incident_result_dir }} on nginx-01."
+
+    - name: Verify normal upload DB row and oversized upload absence directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ upload_incident_db_name }} -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ upload_incident_normal_evidence_id | int }} and work_order_id = {{ upload_incident_work_order_id | int }};"
+        oversized_count=$(sudo -u postgres psql -d {{ upload_incident_db_name }} -At -c \
+          "select count(*) from ops_work_order_evidence_files where work_order_id = {{ upload_incident_work_order_id | int }} and file_name = '{{ upload_incident_oversized_file_name }}';")
+        echo "oversized_metadata_count=${oversized_count}"
+        test "${oversized_count}" = "0"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ upload_incident_db_host }}"
+      register: upload_incident_db_rows
+      changed_when: false
+      failed_when: upload_incident_db_rows.rc != 0 or upload_incident_db_rows.stdout | length == 0
+
+    - name: Verify normal NFS object and oversized NFS absence directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        normal_file="{{ upload_incident_nfs_export_root }}/{{ upload_incident_normal_storage_path }}"
+        test -f "${normal_file}"
+        normal_size=$(stat -c '%s' "${normal_file}")
+        normal_sha=$(sha256sum "${normal_file}" | awk '{print $1}')
+        echo "normal_file=${normal_file}"
+        echo "normal_size=${normal_size}"
+        echo "normal_sha256=${normal_sha}"
+        test "${normal_size}" = "{{ upload_incident_normal_size_bytes }}"
+        test "${normal_sha}" = "{{ upload_incident_normal_sha256 }}"
+
+        work_order_dir="{{ upload_incident_nfs_export_root }}/work-order-{{ upload_incident_work_order_id }}"
+        oversized_file_matches=$(find "${work_order_dir}" -type f -name '*{{ upload_incident_oversized_file_name }}' | wc -l)
+        echo "oversized_file_matches=${oversized_file_matches}"
+        test "${oversized_file_matches}" = "0"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ upload_incident_storage_host }}"
+      register: upload_incident_nfs_check
+      changed_when: false
+
+    - name: Read upload incident Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ upload_incident_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 50 || true"
+      register: upload_incident_nginx_access_log
+      changed_when: false
+
+    - name: Read upload incident Nginx error log evidence
+      ansible.builtin.shell: "grep '{{ upload_incident_request_prefix }}\|client intended to send too large body' /var/log/nginx/ops_error.log | tail -n 50 || true"
+      register: upload_incident_nginx_error_log
+      changed_when: false
+
+    - name: Read upload incident app journald evidence
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ upload_incident_request_prefix }}' | tail -n 50 || true"
+      delegate_to: "{{ upload_incident_app_log_host }}"
+      register: upload_incident_app_log
+      changed_when: false
+
+    - name: Write upload incident validation report
+      ansible.builtin.copy:
+        dest: "{{ upload_incident_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          validation=enhanced-upload-limit-incident
+          request_prefix={{ upload_incident_request_prefix }}
+          base_url={{ upload_incident_base_url }}
+          work_order_id={{ upload_incident_work_order_id }}
+          upload_max_file_size={{ upload_incident_max_file_size }}
+          upload_max_request_size={{ upload_incident_max_request_size }}
+          normal_evidence_id={{ upload_incident_normal_evidence_id }}
+          normal_storage_path={{ upload_incident_normal_storage_path }}
+          normal_size_bytes={{ upload_incident_normal_size_bytes }}
+          normal_sha256={{ upload_incident_normal_sha256 }}
+          oversized_file_name={{ upload_incident_oversized_file_name }}
+          oversized_size_bytes={{ upload_incident_oversized_size_bytes }}
+          oversized_http_code={{ upload_incident_oversized_http_code }}
+          oversized_metadata_match_count={{ upload_incident_oversized_match_count }}
+          classified_failure_layer={{ upload_incident_failure_layer }}
+          db_rows={{ upload_incident_db_rows.stdout | default('n/a') }}
+          nfs_check={{ upload_incident_nfs_check.stdout | default('n/a') }}
+          nginx_access_log_sample={{ upload_incident_nginx_access_log.stdout | default('n/a') }}
+          nginx_error_log_sample={{ upload_incident_nginx_error_log.stdout | default('n/a') }}
+          app_log_host={{ upload_incident_app_log_host }}
+          app_log_sample={{ upload_incident_app_log.stdout | default('n/a') }}
+          result_dir={{ upload_incident_result_dir }}
+
+    - name: Display upload incident validation report
+      ansible.builtin.command: "cat {{ upload_incident_report_file }}"
+      register: upload_incident_report
+      changed_when: false
+
+    - name: Show upload incident validation report
+      ansible.builtin.debug:
+        var: upload_incident_report.stdout_lines
