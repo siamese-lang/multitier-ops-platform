@@ -81,6 +81,18 @@ Validated operating path:
 operator -> nginx-01:443 -> app-01/app-02:8080 -> db-primary-01:5432
 ```
 
+Completed build items:
+
+```text
+Terraform lab-full-min baseline
+Ansible inventory/control path
+PostgreSQL primary configuration
+ops-sample-service systemd deployment
+Nginx HTTPS reverse proxy
+GitHub Actions jar artifact workflow
+Nginx HTTPS ingress rule
+```
+
 Completed validation scenarios:
 
 ```text
@@ -146,6 +158,19 @@ operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
                                  -> nfs-01:/srv/ops-sample/files
 ```
 
+Completed build items:
+
+```text
+Terraform reduced lab-full-ops profile
+lab-full-ops inventory/control path
+PostgreSQL primary wrapper for lab-full-ops
+nfs-01 export baseline
+app-01 NFS client mount baseline
+ops-sample-service lab-full-ops deployment
+Nginx reverse proxy wrapper for lab-full-ops
+work-order evidence smoke playbook
+```
+
 Completed validation scenarios:
 
 ```text
@@ -173,6 +198,13 @@ Key evidence document:
 
 ```text
 docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
+```
+
+Important boundary:
+
+```text
+Do not repeat the full AWS runtime window for small follow-up PRs.
+Use syntax/static checks until a new backup, restore, observability, or incident scenario requires runtime evidence.
 ```
 
 ## Phase 2B. lab-full-ops backup artifact creation — evidence collected
