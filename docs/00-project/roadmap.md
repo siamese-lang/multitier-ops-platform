@@ -16,17 +16,19 @@ Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
 Phase 2A. lab-full-ops storage validation: completed
 Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
 Phase 3. restore-lab DB/file/API recovery validation: completed
-Phase 4. observability baseline: design and Ansible baseline prepared; runtime validation pending
-Phase 5. advanced incident reports and failover: optional after core observability
+Phase 4A. observability logs/service/request-path baseline evidence: completed
+Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
+Phase 4C. metric-based DB service incident diagnosis: completed
+Phase 5. advanced operations: optional and only after roadmap-aligned evidence design
 ```
 
 Important boundary:
 
 ```text
 Backup artifact creation and restore validation were proven separately.
-The project may now claim restore-lab DB/file/API recovery validation success,
-but should not overclaim production-grade HA, automated failover, or managed backup coverage.
-Phase 4 observability runtime validation has not yet been executed.
+Phase 4 observability metrics validation has now been executed and documented.
+The project may claim evidence-driven DB host reachability vs DB service dependency diagnosis,
+but must not overclaim production-grade monitoring, HA, Alertmanager maturity, or SLO/SLA compliance.
 ```
 
 ## Phase 0. lab-runtime smoke test — completed
@@ -128,14 +130,6 @@ Validated reduced topology:
 
 [Private Ops Subnet]
 - backup-01
-```
-
-Validated operating path:
-
-```text
-operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
-                                 |
-                                 -> nfs-01:/srv/ops-sample/files
 ```
 
 Completed validation scenarios:
@@ -289,12 +283,6 @@ Key evidence document:
 docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
 ```
 
-Related fix PR:
-
-```text
-PR #119 [FIX] Make restore-lab runtime validation profile-aware
-```
-
 Final Phase 3 claim:
 
 ```text
@@ -303,7 +291,7 @@ Backup artifact creation had already been validated separately in Phase 2B.
 Restore was validated separately in restore-lab on 2026-07-12.
 ```
 
-## Phase 4. Observability baseline — design and Ansible baseline prepared; runtime validation pending
+## Phase 4. Observability baseline and metrics evidence — completed
 
 Purpose:
 
@@ -312,7 +300,9 @@ Collect logs and metrics that support incident diagnosis.
 The goal is not a pretty dashboard; the goal is evidence for operating decisions.
 ```
 
-Prepared documents and implementation baseline:
+### Phase 4A. Logs, service state, and request-path evidence — completed
+
+Implementation and runbooks:
 
 ```text
 docs/01-architecture/observability-evidence-baseline.md
@@ -321,7 +311,13 @@ docs/03-runbooks/observability-evidence-collection-baseline.md
 infra/ansible/playbooks/observability-baseline.yml
 ```
 
-Prepared evidence scope:
+Runtime evidence document:
+
+```text
+docs/04-evidence/observability-baseline-validation-2026-07-12.md
+```
+
+Validated evidence scope:
 
 ```text
 node health/resource state for nginx-01, app-01, db-primary-01, nfs-01, backup-01
@@ -331,64 +327,193 @@ PostgreSQL service/log visibility
 NFS export/filesystem visibility
 backup/restore artifact and job-log visibility
 request-path probe TSV/report
-optional DB service unavailable incident report
+controlled DB service unavailable incident report
 ```
 
-Optional incident guardrail:
-
-```text
-observability_run_db_service_incident=false by default
-```
-
-This default prevents accidental PostgreSQL service stops during ordinary baseline collection.
-
-Runtime validation is still pending. A future validation window should use the existing policy:
-
-```text
-apply once -> configure baseline -> collect observability evidence
--> run optional DB service incident -> recover -> collect evidence -> destroy once
-```
-
-A future Phase 4 runtime evidence PR may claim only the narrow result:
+Supported Phase 4A claim:
 
 ```text
 Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
 ```
 
-It must not claim:
+### Phase 4B. node_exporter and Prometheus scrape evidence — completed
+
+Implementation and runbooks:
 
 ```text
-production monitoring maturity
-complete Prometheus/Loki/Grafana platform coverage
-Alertmanager maturity
-HA or automated failover
-SLO/SLA compliance
+infra/ansible/playbooks/observability-node-exporter-baseline.yml
+infra/ansible/playbooks/observability-prometheus-scrape-baseline.yml
+docs/03-runbooks/observability-node-exporter-baseline.md
+docs/03-runbooks/observability-prometheus-scrape-baseline.md
+docs/03-runbooks/observability-metrics-runtime-validation.md
 ```
 
-Recommended next task:
+Runtime evidence document:
 
 ```text
-[VALIDATION] Run and document observability baseline evidence
+docs/04-evidence/observability-metrics-validation-2026-07-12.md
 ```
 
-Important boundary:
+Validated monitoring-enabled topology:
 
 ```text
-Do not start with Grafana dashboard polish.
-Do not expand Prometheus/Loki before basic logs and metrics are used in an incident report.
-Do not turn Phase 4 into a CloudWatch-managed architecture or dashboard gallery.
+[Public Subnet]
+- bastion-01
+- nginx-01
+
+[Private App Subnet]
+- app-01
+
+[Private DB Subnet]
+- db-primary-01
+
+[Private Storage Subnet]
+- nfs-01
+
+[Private Ops Subnet]
+- backup-01
+- mon-01
 ```
+
+Terraform profile flags:
+
+```text
+app_02=false
+backup_node=true
+loadgen_node=false
+logging_node=false
+monitoring_node=true
+nat_gateway=true
+storage_node=true
+```
+
+Validated Prometheus scrape result:
+
+```text
+mon-01 Prometheus scraped:
+- nginx-01:9100
+- app-01:9100
+- db-primary-01:9100
+- nfs-01:9100
+- backup-01:9100
+
+Final post-fix evidence:
+active_targets=5
+healthy_targets=5
+up_results=5
+healthy_up_results=5
+```
+
+Supported Phase 4B claim:
+
+```text
+Prometheus scrape evidence validated host-level node_exporter targets for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
+```
+
+### Phase 4C. Metric-based DB service incident diagnosis — completed
+
+Scenario:
+
+```text
+PostgreSQL service was stopped on db-primary-01 while node_exporter and Prometheus remained active.
+```
+
+Diagnostic distinction:
+
+```text
+Prometheus up{instance="db-primary-01:9100"}=1
+  -> DB host reachable from mon-01
+
+/readyz 503 and /api/work-orders/summary 503
+  -> application DB dependency failing
+
+PostgreSQL service inactive and port 5432 closed
+  -> DB service unavailable, not DB host unavailable
+```
+
+Recovery evidence:
+
+```text
+PostgreSQL service active
+port 5432 LISTEN
+/readyz 200
+/api/work-orders/summary 200
+```
+
+Supported Phase 4C claim:
+
+```text
+Prometheus metrics helped distinguish DB host reachability from DB service dependency failure.
+```
+
+### Phase 4 runtime findings fixed
+
+```text
+PR #126 defined observability_db_target default for controlled DB incidents.
+PR #130 strengthened Prometheus scrape validation so evidence is collected only after target registration and job-specific up query stability.
+```
+
+Important Prometheus finding:
+
+```text
+Prometheus /-/ready only proves the server is ready.
+It does not prove scrape targets are registered or healthy.
+```
+
+Local raw evidence archives:
+
+```text
+.tmp/observability-baseline-20260712T110244Z.tar.gz
+.tmp/observability-metrics-20260712T121325Z.tar.gz
+```
+
+Raw evidence remains local and is not committed.
 
 ## Phase 5. Advanced operations — optional after core observability
 
 Possible items:
 
 ```text
+Prometheus alert rule evaluation for DB dependency symptoms
+Loki/log query-based incident correlation
 PostgreSQL standby and promote
 Nginx active/active or failover entrypoint
 HikariCP and DB connection pool bottleneck analysis
 Tomcat thread saturation
-Prometheus alert rule and Alertmanager notification
-Loki log query-based incident diagnosis
 p95/p99 latency comparison before/after tuning
 ```
+
+Recommended next task:
+
+```text
+[ALERT] Add minimal Prometheus alert rule for DB service dependency evidence
+```
+
+Scope for the next task:
+
+```text
+Add one or two Prometheus rule files and validate rule evaluation evidence.
+Do not claim Alertmanager notification maturity unless notification routing is separately configured and validated.
+Do not start with Grafana dashboard polish.
+```
+
+Still not claimed:
+
+```text
+production monitoring maturity
+Grafana dashboard readiness
+Alertmanager notification maturity
+PostgreSQL HA
+automatic failover
+SLO/SLA compliance
+```
+
+## Current handoff addendum
+
+The most recent continuation addendum is:
+
+```text
+docs/00-project/current-state-after-observability-metrics.md
+```
+
+Read it with `docs/00-project/next-chat-handoff.md` when continuing this project in a new conversation.
