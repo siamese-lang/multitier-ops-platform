@@ -49,3 +49,46 @@ lab_full_ops_backup_restic_snapshot_summary: "{{ lab_full_ops_backup_run_dir }}/
 # Example:
 # ansible-playbook ... -e 'restic_password=<strong-local-password>'
 restic_password: ""
+
+# Restore-lab defaults. These values describe how backup-01 in the restore-lab
+# runtime window receives the preserved local backup archive and restores DB/file
+# artifacts into the fresh restore-lab DB and NFS tiers.
+lab_full_ops_restore_backup_id: lab-full-ops-backup-20260712T072623
+lab_full_ops_restore_local_archive: "/tmp/lab-full-ops-backup-validation/{{ lab_full_ops_restore_backup_id }}.tar.gz"
+lab_full_ops_restore_root: /srv/ops-restore
+lab_full_ops_restore_input_dir: "{{ lab_full_ops_restore_root }}/input"
+lab_full_ops_restore_unpack_dir: "{{ lab_full_ops_restore_root }}/unpacked"
+lab_full_ops_restore_stage_dir: "{{ lab_full_ops_restore_root }}/restic-stage"
+lab_full_ops_restore_report_dir: /tmp/multitier-ops-platform
+lab_full_ops_restore_report_file: "{{ lab_full_ops_restore_report_dir }}/restore-lab-db-file-restore-{{ inventory_hostname }}.txt"
+lab_full_ops_restore_remote_archive: "{{ lab_full_ops_restore_input_dir }}/{{ lab_full_ops_restore_backup_id }}.tar.gz"
+
+lab_full_ops_restore_unpacked_backup_root: "{{ lab_full_ops_restore_unpack_dir }}/lab-full-ops"
+lab_full_ops_restore_artifact_dir: "{{ lab_full_ops_restore_unpacked_backup_root }}/artifacts/{{ lab_full_ops_restore_backup_id }}"
+lab_full_ops_restore_manifest_file: "{{ lab_full_ops_restore_artifact_dir }}/backup-manifest.env"
+lab_full_ops_restore_pg_dump_file: "{{ lab_full_ops_restore_artifact_dir }}/opsdb-{{ lab_full_ops_restore_backup_id }}.dump"
+lab_full_ops_restore_restic_repository: "{{ lab_full_ops_restore_unpacked_backup_root }}/restic-repo"
+lab_full_ops_restore_restic_password_file: "{{ lab_full_ops_backup_restic_password_file }}"
+lab_full_ops_restore_restic_original_path: "{{ lab_full_ops_restore_stage_dir }}/mnt/ops-sample/files-backup-source"
+
+# Restore-lab DB target. The first restore proof uses the same DB name/user as
+# the source workload but targets a fresh restore-lab db-primary-01.
+lab_full_ops_restore_db_host: "{{ lab_full_ops_backup_db_host }}"
+lab_full_ops_restore_db_port: "{{ lab_full_ops_backup_db_port }}"
+lab_full_ops_restore_db_name: "{{ lab_full_ops_backup_db_name }}"
+lab_full_ops_restore_db_user: "{{ lab_full_ops_backup_db_user }}"
+lab_full_ops_restore_pg_restore_options: "--clean --if-exists --no-owner --no-acl"
+
+# Restore-lab file target. backup-01 mounts the restore-lab nfs-01 export and
+# writes restored file objects into that fresh file root.
+lab_full_ops_restore_nfs_source: "{{ lab_full_ops_backup_nfs_source }}"
+lab_full_ops_restore_nfs_mount_path: /mnt/ops-sample/files-restore-target
+lab_full_ops_restore_nfs_fstype: nfs
+lab_full_ops_restore_nfs_mount_options: rw,sync,hard,intr,_netdev
+
+# Expected source evidence from docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md.
+lab_full_ops_restore_expected_work_order_count: 6
+lab_full_ops_restore_expected_evidence_file_count: 1
+lab_full_ops_restore_expected_sample_size_bytes: 215
+lab_full_ops_restore_expected_sample_sha256: 4b4dc6fd2e07d5cd1713f846d9baf4c659209535872c5add945f65f252290150
+lab_full_ops_restore_expected_restic_snapshot_id: 7f063aa1
