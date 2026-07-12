@@ -52,10 +52,13 @@ ops_app_jar_url: ""
 ops_app_jar_source_path: ""
 
 # Prevent deploying an older artifact that still has the basic work-order API
-# but lacks the storage evidence endpoints required by lab-full-ops validation.
+# but lacks the enhanced web workflow, upload/download flow, and failure-lab
+# endpoints required by lab-full-ops enhanced service validation.
 ops_app_required_jar_entries:
   - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderEvidenceController.class
   - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderEvidenceRepository.class
+  - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderWebController.class
+  - BOOT-INF/classes/io/github/siamese_lang/ops/FailureLabController.class
 
 # DB connection used by ops-sample-service.
 # db-primary-01 is defined in the lab-full-ops inventory.

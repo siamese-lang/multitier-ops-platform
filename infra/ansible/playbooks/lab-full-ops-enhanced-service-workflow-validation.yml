@@ -1,0 +1,408 @@
+---
+- name: Validate enhanced ops-sample-service web workflow through nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    enhanced_service_request_prefix: lab-full-ops-enhanced-service
+    enhanced_service_report_dir: /tmp/multitier-ops-platform
+    enhanced_service_result_dir: "{{ enhanced_service_report_dir }}/lab-full-ops-enhanced-service-workflow"
+    enhanced_service_report_file: "{{ enhanced_service_report_dir }}/lab-full-ops-enhanced-service-workflow-{{ inventory_hostname }}.txt"
+    enhanced_service_base_url: https://127.0.0.1
+    enhanced_service_sleep_millis: 1200
+    enhanced_service_db_sleep_millis: 800
+    enhanced_service_db_host: db-primary-01
+    enhanced_service_storage_host: nfs-01
+    enhanced_service_app_log_host: "{{ groups['app'][0] | default('app-01') }}"
+    enhanced_service_nfs_export_root: /srv/ops-sample/files
+    enhanced_service_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert dependent hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['db'] is defined
+          - enhanced_service_db_host in groups['db']
+          - groups['storage'] is defined
+          - enhanced_service_storage_host in groups['storage']
+          - groups['app'] is defined
+          - enhanced_service_app_log_host in groups['app']
+        fail_msg: "db-primary-01, nfs-01, and at least one app host must exist before enhanced workflow validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this enhanced service workflow validation from nginx-01 through the web inventory group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook validates the enhanced ops-sample-service workflow through Nginx."
+          - "Run only during one planned lab-full-ops runtime validation window."
+          - "Do not run Terraform apply/destroy just for this playbook alone."
+
+  tasks:
+    - name: Ensure enhanced service validation result directory exists
+      ansible.builtin.file:
+        path: "{{ enhanced_service_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate enhanced web workflow, upload/download, and failure-lab endpoints through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ enhanced_service_result_dir }}"
+        base_url="{{ enhanced_service_base_url }}"
+        request_prefix="{{ enhanced_service_request_prefix }}"
+        sleep_millis="{{ enhanced_service_sleep_millis | int }}"
+        db_sleep_millis="{{ enhanced_service_db_sleep_millis | int }}"
+
+        work_orders_html="${result_dir}/work-orders.html"
+        new_work_order_html="${result_dir}/work-order-new.html"
+        create_headers="${result_dir}/work-order-create.headers"
+        create_body="${result_dir}/work-order-create.html"
+        detail_html="${result_dir}/work-order-detail.html"
+        status_headers="${result_dir}/work-order-status.headers"
+        status_body="${result_dir}/work-order-status.html"
+        work_order_json="${result_dir}/work-order.json"
+        events_json="${result_dir}/work-order-events.json"
+        audit_logs_json="${result_dir}/audit-logs.json"
+        upload_headers="${result_dir}/evidence-upload.headers"
+        upload_body="${result_dir}/evidence-upload.html"
+        evidence_list_json="${result_dir}/evidence-list.json"
+        consistency_json="${result_dir}/evidence-consistency.json"
+        downloaded_file="${result_dir}/downloaded-evidence.txt"
+        failure_lab_html="${result_dir}/failure-lab.html"
+        sleep_json="${result_dir}/failure-lab-sleep.json"
+        db_sleep_json="${result_dir}/failure-lab-db-sleep.json"
+        file_storage_json="${result_dir}/failure-lab-file-storage.json"
+        upload_limits_json="${result_dir}/failure-lab-upload-limits.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        upload_file_name="enhanced-service-evidence-${request_prefix}.txt"
+        upload_file="${result_dir}/${upload_file_name}"
+        cat > "${upload_file}" <<EOF
+        service=ops-sample-service
+        validation=enhanced-service-workflow
+        requestPrefix=${request_prefix}
+        createdAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        EOF
+
+        upload_expected_size=$(stat -c '%s' "${upload_file}")
+        upload_expected_sha256=$(sha256sum "${upload_file}" | awk '{print $1}')
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-orders-page" \
+          "${base_url}/work-orders" \
+          > "${work_orders_html}"
+        grep -q "작업 요청" "${work_orders_html}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-new-page" \
+          "${base_url}/work-orders/new" \
+          > "${new_work_order_html}"
+        grep -qi "form" "${new_work_order_html}"
+
+        curl -k -fsS \
+          -D "${create_headers}" \
+          -o "${create_body}" \
+          -H "X-Request-Id: ${request_prefix}-web-create" \
+          -X POST "${base_url}/work-orders" \
+          --data-urlencode "title=Enhanced service workflow validation" \
+          --data-urlencode "priority=HIGH" \
+          --data-urlencode "requester=service-desk" \
+          --data-urlencode "assignee=ops-admin" \
+          --data-urlencode "description=Validate web workflow, status history, evidence upload/download, and failure-lab endpoints."
+
+        location=$(awk 'BEGIN{IGNORECASE=1} /^Location:/ {print $2}' "${create_headers}" | tr -d '\r' | tail -n 1)
+        work_order_id="${location##*/}"
+        if ! [[ "${work_order_id}" =~ ^[0-9]+$ ]]; then
+          echo "could not parse work_order_id from Location header: ${location}" >&2
+          exit 1
+        fi
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-detail-page" \
+          "${base_url}/work-orders/${work_order_id}" \
+          > "${detail_html}"
+        grep -q "증빙 파일" "${detail_html}"
+
+        curl -k -fsS \
+          -D "${status_headers}" \
+          -o "${status_body}" \
+          -H "X-Request-Id: ${request_prefix}-web-status" \
+          -X POST "${base_url}/work-orders/${work_order_id}/status" \
+          --data-urlencode "status=IN_PROGRESS" \
+          --data-urlencode "actor=ops-admin" \
+          --data-urlencode "message=Started enhanced WEB/WAS workflow validation."
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-json" \
+          "${base_url}/api/work-orders/${work_order_id}" \
+          > "${work_order_json}"
+        work_order_status=$(python3 -c "import json; print(json.load(open('${work_order_json}'))['data']['status'])")
+        test "${work_order_status}" = "IN_PROGRESS"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-events-json" \
+          "${base_url}/api/work-orders/${work_order_id}/events" \
+          > "${events_json}"
+        event_count=$(python3 -c "import json; print(len(json.load(open('${events_json}'))['data']))")
+        status_event_found=$(python3 -c "import json; data=json.load(open('${events_json}'))['data']; print(str(any(e.get('eventType') in ('STATUS_CHANGED','STATUS_CONFIRMED') and e.get('toStatus') == 'IN_PROGRESS' for e in data)).lower())")
+        test "${status_event_found}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-audit-json" \
+          "${base_url}/api/audit-logs?limit=20" \
+          > "${audit_logs_json}"
+        audit_count=$(python3 -c "import json; print(len(json.load(open('${audit_logs_json}'))['data']))")
+
+        curl -k -fsS \
+          -D "${upload_headers}" \
+          -o "${upload_body}" \
+          -H "X-Request-Id: ${request_prefix}-web-upload" \
+          -X POST "${base_url}/work-orders/${work_order_id}/evidence" \
+          -F "file=@${upload_file};filename=${upload_file_name}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-list" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_json}"
+
+        evidence_values=$(python3 - "${evidence_list_json}" "${upload_file_name}" <<'PY'
+        import json
+        import sys
+
+        path = sys.argv[1]
+        file_name = sys.argv[2]
+        rows = json.load(open(path))["data"]
+        matches = [row for row in rows if row.get("fileName") == file_name]
+        if not matches:
+            raise SystemExit(f"uploaded file metadata not found: {file_name}")
+        row = max(matches, key=lambda item: int(item["id"]))
+        print(f"evidence_id={row['id']}")
+        print(f"storage_path={row['storagePath']}")
+        print(f"metadata_size_bytes={row['sizeBytes']}")
+        print(f"metadata_sha256={row['sha256']}")
+        print(f"metadata_file_name={row['fileName']}")
+        PY
+        )
+        eval "${evidence_values}"
+
+        test "${metadata_size_bytes}" = "${upload_expected_size}"
+        test "${metadata_sha256}" = "${upload_expected_sha256}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-download" \
+          "${base_url}/work-orders/${work_order_id}/evidence/${evidence_id}/download" \
+          -o "${downloaded_file}"
+        downloaded_sha256=$(sha256sum "${downloaded_file}" | awk '{print $1}')
+        test "${downloaded_sha256}" = "${upload_expected_sha256}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${consistency_json}"
+        consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['checksumMatches']).lower())")
+        resolved_path=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['resolvedPath'])")
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-failure-lab-page" \
+          "${base_url}/ops/failure-lab" \
+          > "${failure_lab_html}"
+        grep -q "Failure Lab" "${failure_lab_html}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-was-sleep" \
+          "${base_url}/api/failure-lab/sleep?millis=${sleep_millis}" \
+          > "${sleep_json}"
+        sleep_status=$(python3 -c "import json; print(json.load(open('${sleep_json}'))['status'])")
+        sleep_bounded_millis=$(python3 -c "import json; print(json.load(open('${sleep_json}'))['boundedMillis'])")
+        test "${sleep_status}" = "ok"
+        test "${sleep_bounded_millis}" = "${sleep_millis}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-db-sleep" \
+          "${base_url}/api/failure-lab/db-sleep?millis=${db_sleep_millis}" \
+          > "${db_sleep_json}"
+        db_sleep_status=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['status'])")
+        db_sleep_bounded_millis=$(python3 -c "import json; print(json.load(open('${db_sleep_json}'))['boundedMillis'])")
+        test "${db_sleep_status}" = "ok"
+        test "${db_sleep_bounded_millis}" = "${db_sleep_millis}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-file-storage-check" \
+          "${base_url}/api/failure-lab/file-storage-check" \
+          > "${file_storage_json}"
+        storage_ready=$(python3 -c "import json; print(str(json.load(open('${file_storage_json}'))['storage']['ready']).lower())")
+        test "${storage_ready}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-upload-limits" \
+          "${base_url}/api/failure-lab/upload-limits" \
+          > "${upload_limits_json}"
+        upload_limits_status=$(python3 -c "import json; print(json.load(open('${upload_limits_json}'))['status'])")
+        upload_related_flow=$(python3 -c "import json; print(json.load(open('${upload_limits_json}'))['relatedFlow'])")
+        test "${upload_limits_status}" = "ok"
+        test "${upload_related_flow}" = "POST /work-orders/{id}/evidence"
+
+        cat > "${parsed_kv}" <<EOF
+        work_order_id=${work_order_id}
+        work_order_status=${work_order_status}
+        event_count=${event_count}
+        status_event_found=${status_event_found}
+        audit_count=${audit_count}
+        evidence_id=${evidence_id}
+        metadata_file_name=${metadata_file_name}
+        storage_path=${storage_path}
+        upload_expected_size_bytes=${upload_expected_size}
+        metadata_size_bytes=${metadata_size_bytes}
+        upload_expected_sha256=${upload_expected_sha256}
+        metadata_sha256=${metadata_sha256}
+        downloaded_sha256=${downloaded_sha256}
+        consistency_status=${consistency_status}
+        consistent=${consistent}
+        file_exists=${file_exists}
+        size_matches=${size_matches}
+        checksum_matches=${checksum_matches}
+        resolved_path=${resolved_path}
+        sleep_status=${sleep_status}
+        sleep_bounded_millis=${sleep_bounded_millis}
+        db_sleep_status=${db_sleep_status}
+        db_sleep_bounded_millis=${db_sleep_bounded_millis}
+        storage_ready=${storage_ready}
+        upload_limits_status=${upload_limits_status}
+        upload_related_flow=${upload_related_flow}
+        result_dir=${result_dir}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: enhanced_service_workflow
+      changed_when: true
+
+    - name: Extract enhanced service workflow values
+      ansible.builtin.set_fact:
+        enhanced_work_order_id: "{{ enhanced_service_workflow.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        enhanced_work_order_status: "{{ enhanced_service_workflow.stdout | regex_search('work_order_status=([^\n]+)', '\\1') | first }}"
+        enhanced_event_count: "{{ enhanced_service_workflow.stdout | regex_search('event_count=([^\n]+)', '\\1') | first }}"
+        enhanced_status_event_found: "{{ enhanced_service_workflow.stdout | regex_search('status_event_found=([^\n]+)', '\\1') | first }}"
+        enhanced_evidence_id: "{{ enhanced_service_workflow.stdout | regex_search('evidence_id=([^\n]+)', '\\1') | first }}"
+        enhanced_storage_path: "{{ enhanced_service_workflow.stdout | regex_search('storage_path=([^\n]+)', '\\1') | first }}"
+        enhanced_expected_size_bytes: "{{ enhanced_service_workflow.stdout | regex_search('upload_expected_size_bytes=([^\n]+)', '\\1') | first }}"
+        enhanced_expected_sha256: "{{ enhanced_service_workflow.stdout | regex_search('upload_expected_sha256=([^\n]+)', '\\1') | first }}"
+        enhanced_metadata_sha256: "{{ enhanced_service_workflow.stdout | regex_search('metadata_sha256=([^\n]+)', '\\1') | first }}"
+        enhanced_downloaded_sha256: "{{ enhanced_service_workflow.stdout | regex_search('downloaded_sha256=([^\n]+)', '\\1') | first }}"
+        enhanced_consistent: "{{ enhanced_service_workflow.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        enhanced_storage_ready: "{{ enhanced_service_workflow.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | first }}"
+        enhanced_result_dir: "{{ enhanced_service_workflow.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert uploaded evidence storage path has expected shape
+      ansible.builtin.assert:
+        that:
+          - enhanced_storage_path is match('^work-order-[0-9]+/upload-[0-9a-f-]+-enhanced-service-evidence-lab-full-ops-enhanced-service\.txt$')
+          - enhanced_work_order_status == 'IN_PROGRESS'
+          - enhanced_status_event_found == 'true'
+          - enhanced_consistent == 'true'
+          - enhanced_storage_ready == 'true'
+          - enhanced_expected_sha256 == enhanced_metadata_sha256
+          - enhanced_expected_sha256 == enhanced_downloaded_sha256
+        fail_msg: "Enhanced service workflow returned inconsistent values. Check {{ enhanced_result_dir }} on nginx-01."
+
+    - name: Verify enhanced work-order and evidence rows directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ enhanced_service_db_name }} -AtF $'\t' -c \
+          "select id, status, requester, assignee from ops_work_orders where id = {{ enhanced_work_order_id | int }};"
+        sudo -u postgres psql -d {{ enhanced_service_db_name }} -AtF $'\t' -c \
+          "select event_type, from_status, to_status, actor from ops_work_order_events where work_order_id = {{ enhanced_work_order_id | int }} order by id;"
+        sudo -u postgres psql -d {{ enhanced_service_db_name }} -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ enhanced_evidence_id | int }} and work_order_id = {{ enhanced_work_order_id | int }};"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ enhanced_service_db_host }}"
+      register: enhanced_db_rows
+      changed_when: false
+      failed_when: enhanced_db_rows.rc != 0 or enhanced_db_rows.stdout | length == 0
+
+    - name: Verify uploaded NFS file object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ enhanced_service_nfs_export_root }}/{{ enhanced_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ enhanced_expected_size_bytes }}"
+        test "$sha" = "{{ enhanced_expected_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ enhanced_service_storage_host }}"
+      register: enhanced_nfs_object
+      changed_when: false
+
+    - name: Read recent Nginx request-id log evidence
+      ansible.builtin.shell: "grep '{{ enhanced_service_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 30 || true"
+      register: enhanced_nginx_log
+      changed_when: false
+
+    - name: Read recent app journald request-id log evidence
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ enhanced_service_request_prefix }}' | tail -n 30 || true"
+      delegate_to: "{{ enhanced_service_app_log_host }}"
+      register: enhanced_app_log
+      changed_when: false
+
+    - name: Write enhanced service workflow validation report
+      ansible.builtin.copy:
+        dest: "{{ enhanced_service_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          validation=enhanced-service-workflow
+          request_prefix={{ enhanced_service_request_prefix }}
+          base_url={{ enhanced_service_base_url }}
+          work_order_id={{ enhanced_work_order_id }}
+          work_order_status={{ enhanced_work_order_status }}
+          event_count={{ enhanced_event_count }}
+          status_event_found={{ enhanced_status_event_found }}
+          evidence_id={{ enhanced_evidence_id }}
+          storage_path={{ enhanced_storage_path }}
+          expected_size_bytes={{ enhanced_expected_size_bytes }}
+          expected_sha256={{ enhanced_expected_sha256 }}
+          metadata_sha256={{ enhanced_metadata_sha256 }}
+          downloaded_sha256={{ enhanced_downloaded_sha256 }}
+          api_consistent={{ enhanced_consistent }}
+          file_storage_ready={{ enhanced_storage_ready }}
+          db_rows={{ enhanced_db_rows.stdout | default('n/a') }}
+          nfs_object_check={{ enhanced_nfs_object.stdout | default('n/a') }}
+          nginx_log_sample={{ enhanced_nginx_log.stdout | default('n/a') }}
+          app_log_host={{ enhanced_service_app_log_host }}
+          app_log_sample={{ enhanced_app_log.stdout | default('n/a') }}
+          result_dir={{ enhanced_result_dir }}
+
+    - name: Display enhanced service workflow validation report
+      ansible.builtin.command: "cat {{ enhanced_service_report_file }}"
+      register: enhanced_service_report
+      changed_when: false
+
+    - name: Show enhanced service workflow validation report
+      ansible.builtin.debug:
+        var: enhanced_service_report.stdout_lines

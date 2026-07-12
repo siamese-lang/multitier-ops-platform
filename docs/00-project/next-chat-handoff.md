@@ -65,12 +65,14 @@ docs/00-project/workload-strategy.md
 docs/00-project/ops-sample-service-completion-scope.md
 docs/00-project/portfolio-summary.md
 docs/00-project/interview-explanation-notes.md
+docs/00-project/next-chat-handoff.md
+docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
 docs/04-evidence/evidence-index.md
 ```
 
 For detailed runtime evidence, read the referenced documents in `docs/04-evidence/`.
 
-## Current completed evidence state
+## Current completed runtime evidence state
 
 ```text
 Phase 0. lab-runtime smoke test: completed
@@ -86,13 +88,14 @@ Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
 
 ## Current service implementation state
 
-The service implementation baseline is now completed in repository code:
+The service implementation baseline is complete in repository code:
 
 ```text
 Phase 5A. work-order domain/schema: implemented
 Phase 5B. server-rendered work-order web workflow: implemented
 Phase 5C. evidence upload/download workflow: implemented
 Phase 5D. WEB/WAS failure-lab endpoints: implemented
+Phase 5E. enhanced service workflow validation playbook: statically prepared
 ```
 
 Implemented service capabilities:
@@ -103,6 +106,13 @@ status history and operation audit logs
 evidence upload/download workflow
 PostgreSQL metadata + file storage object consistency path
 failure-lab: sleep, db-sleep, file-storage-check, upload-limits
+```
+
+Validation prep added:
+
+```text
+infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
+docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
 ```
 
 The service can now answer this interview question without defensive wording:
@@ -120,7 +130,7 @@ Target answer:
 Important boundary:
 
 ```text
-The enhanced service implementation baseline is complete.
+The enhanced service implementation and validation playbook baseline are complete.
 Enhanced AWS runtime evidence is not yet refreshed.
 ```
 
@@ -141,7 +151,7 @@ Kubernetes/EKS/GitOps
 new AWS runtime windows by default
 ```
 
-The next work should focus on enhanced-service validation, not observability expansion.
+The next work should focus on one planned enhanced-service runtime validation window, not more app features or observability expansion.
 
 ## Validated claims
 
@@ -157,11 +167,12 @@ Prometheus metrics distinguished DB host reachability from PostgreSQL service fa
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
 ```
 
-The repository can currently support these implementation claims:
+The repository can currently support these implementation and prep claims:
 
 ```text
 ops-sample-service includes a lightweight web workflow for operations work orders and evidence files.
 The service includes work-order pages, status history, audit logs, evidence upload/download, and failure-lab endpoints.
+The enhanced service workflow validation playbook is prepared, but not yet runtime-validated.
 ```
 
 ## Claims not yet supported by refreshed runtime evidence
@@ -205,7 +216,7 @@ No more observability feature expansion.
 No more Prometheus/Grafana/Alertmanager expansion.
 ```
 
-For enhanced service validation, use static and local checks first. Open a new AWS runtime only after validation prep is ready for one planned validation window:
+For enhanced service validation, use one planned validation window:
 
 ```text
 prepare statically -> apply once -> configure -> validate -> collect evidence -> destroy once
@@ -213,16 +224,16 @@ prepare statically -> apply once -> configure -> validate -> collect evidence ->
 
 ## Recommended next tasks
 
-Use validation prep tasks by default, not more app feature expansion:
+Use runtime planning and validation documentation tasks by default:
 
 ```text
-[ANSIBLE] Add enhanced service workflow validation
+[VALIDATION] Run enhanced service workflow validation in one planned runtime window
 [VALIDATION] Document enhanced web workflow evidence
 [VALIDATION] Refresh restore-lab evidence after service completion
 [DOCS] Update evidence index after enhanced-service validation
 ```
 
-Avoid new runtime tasks until the validation playbooks are ready.
+Avoid app feature expansion unless validation exposes a concrete defect.
 
 ## Prompt to start the next chat
 
@@ -241,6 +252,7 @@ Before doing any work, read these repository documents and treat them as the sou
 - docs/00-project/portfolio-summary.md
 - docs/00-project/interview-explanation-notes.md
 - docs/00-project/next-chat-handoff.md
+- docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
 - docs/04-evidence/evidence-index.md
 
 The fixed project theme is:
@@ -263,8 +275,9 @@ Current completed runtime evidence state:
 Current service implementation state:
 - `ops-sample-service` is now implemented as a lightweight web service for operations work orders and evidence files.
 - It includes work-order list/detail/create/status-change pages, status history, audit logs, evidence upload/download, DB/file consistency paths, and WEB/WAS failure-lab endpoints.
+- Enhanced workflow validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml`.
 
 Phase 4 observability expansion is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default.
 
-Current priority is enhanced-service validation: prepare Ansible validation for the web workflow, upload/download, request ID log trace, failure-lab slow request and DB sleep paths, then run one planned AWS runtime validation window, collect evidence, refresh evidence docs, and destroy once.
+Current priority is one planned enhanced-service runtime validation window: apply once, configure DB/NFS/app/Nginx, run `lab-full-ops-enhanced-service-workflow-validation.yml`, collect evidence, document enhanced web workflow evidence, and destroy once.
 ```
