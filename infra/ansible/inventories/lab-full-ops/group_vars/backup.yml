@@ -1,0 +1,51 @@
+---
+# Backup-tier defaults for lab-full-ops backup-01.
+# Do not put real production secrets in this file.
+
+lab_full_ops_backup_manage_packages: true
+lab_full_ops_backup_packages:
+  - postgresql-client
+  - nfs-common
+  - restic
+
+lab_full_ops_backup_root: /srv/ops-backups/lab-full-ops
+lab_full_ops_backup_artifact_dir: "{{ lab_full_ops_backup_root }}/artifacts"
+lab_full_ops_backup_run_dir: "{{ lab_full_ops_backup_artifact_dir }}/{{ lab_full_ops_backup_id }}"
+lab_full_ops_backup_report_dir: /tmp/multitier-ops-platform
+lab_full_ops_backup_report_file: "{{ lab_full_ops_backup_report_dir }}/lab-full-ops-backup-baseline-{{ inventory_hostname }}.txt"
+
+lab_full_ops_backup_id_prefix: lab-full-ops-backup
+lab_full_ops_backup_id: "{{ lab_full_ops_backup_id_prefix }}-{{ ansible_date_time.iso8601_basic_short | default('manual') }}"
+
+# PostgreSQL backup boundary: opsdb metadata/state.
+lab_full_ops_backup_db_host: "{{ hostvars['db-primary-01'].ansible_host | default('db-primary-01') }}"
+lab_full_ops_backup_db_port: "{{ postgresql_port | default(5432) }}"
+lab_full_ops_backup_db_name: "{{ ops_db_name | default('opsdb') }}"
+lab_full_ops_backup_db_user: "{{ ops_db_user | default('ops_user') }}"
+lab_full_ops_backup_pg_dump_file: "{{ lab_full_ops_backup_run_dir }}/{{ lab_full_ops_backup_db_name }}-{{ lab_full_ops_backup_id }}.dump"
+
+# File backup boundary: nfs-01 exported file objects.
+lab_full_ops_backup_nfs_server_host: "{{ hostvars['nfs-01'].ansible_host | default('nfs-01') }}"
+lab_full_ops_backup_nfs_export_path: /srv/ops-sample/files
+lab_full_ops_backup_nfs_source: "{{ lab_full_ops_backup_nfs_server_host }}:{{ lab_full_ops_backup_nfs_export_path }}"
+lab_full_ops_backup_nfs_mount_path: /mnt/ops-sample/files-backup-source
+lab_full_ops_backup_nfs_fstype: nfs
+lab_full_ops_backup_nfs_mount_options: ro,sync,hard,intr,_netdev
+
+lab_full_ops_backup_file_inventory: "{{ lab_full_ops_backup_run_dir }}/nfs-file-inventory.txt"
+lab_full_ops_backup_checksum_list: "{{ lab_full_ops_backup_run_dir }}/nfs-sha256sums.txt"
+lab_full_ops_backup_manifest_file: "{{ lab_full_ops_backup_run_dir }}/backup-manifest.env"
+lab_full_ops_backup_min_file_count: 1
+
+# Restic repository is local to backup-01 for Phase 2B baseline creation.
+# Phase 3 restore-lab must explicitly preserve or export these artifacts before
+# destroying the source lab.
+lab_full_ops_backup_restic_repository: "{{ lab_full_ops_backup_root }}/restic-repo"
+lab_full_ops_backup_restic_password_file: /etc/multitier-ops-platform/restic-password
+lab_full_ops_backup_restic_backup_log: "{{ lab_full_ops_backup_run_dir }}/restic-backup.jsonl"
+lab_full_ops_backup_restic_snapshot_summary: "{{ lab_full_ops_backup_run_dir }}/restic-snapshot.txt"
+
+# Supply from ignored inventory, --extra-vars, or future Ansible Vault.
+# Example:
+# ansible-playbook ... -e 'restic_password=<strong-local-password>'
+restic_password: ""
