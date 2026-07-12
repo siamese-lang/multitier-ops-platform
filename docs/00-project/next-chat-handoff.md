@@ -54,6 +54,7 @@ docs/00-project/project-scope.md
 docs/00-project/roadmap.md
 docs/00-project/workload-strategy.md
 docs/00-project/portfolio-summary.md
+docs/00-project/interview-explanation-notes.md
 docs/04-evidence/evidence-index.md
 ```
 
@@ -90,7 +91,7 @@ Kubernetes/EKS/GitOps
 new AWS runtime windows by default
 ```
 
-The next work should be documentation and portfolio packaging.
+The next work should be documentation and portfolio packaging only.
 
 ## Validated claims
 
@@ -146,11 +147,10 @@ prepare statically -> apply once -> configure -> validate -> collect evidence ->
 Use documentation-only tasks by default:
 
 ```text
-[DOCS] Improve portfolio-facing project summary
-[DOCS] Polish evidence index and claim map
-[DOCS] Prepare interview explanation notes
-[DOCS] Add architecture diagram if needed
-[DOCS] Review README for recruiter readability
+[DOCS] Final pass for README/evidence link consistency
+[DOCS] Polish Korean interview wording for target job postings
+[DOCS] Add a simple architecture diagram if needed
+[DOCS] Prepare GitHub repository URL submission note
 ```
 
 Avoid new runtime tasks unless the user explicitly chooses a missing validation scenario.
@@ -167,6 +167,7 @@ Before doing any work, read these repository documents and treat them as the sou
 - docs/00-project/roadmap.md
 - docs/00-project/workload-strategy.md
 - docs/00-project/portfolio-summary.md
+- docs/00-project/interview-explanation-notes.md
 - docs/00-project/next-chat-handoff.md
 - docs/04-evidence/evidence-index.md
 
@@ -187,5 +188,5 @@ Current completed state:
 - Phase 4C metric-based DB service incident diagnosis completed.
 - Phase 4D Prometheus DB service alert-rule evaluation evidence completed.
 
-Phase 4 is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default. Next work should focus on portfolio-facing summary, evidence index, README clarity, and interview explanation.
+Phase 4 is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default. Next work should focus on final portfolio readability, evidence links, and interview explanation polish.
 ```
