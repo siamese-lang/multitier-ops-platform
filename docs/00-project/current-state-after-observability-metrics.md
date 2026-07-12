@@ -1,6 +1,6 @@
 # Current state after observability metrics validation
 
-Use this addendum when continuing the project after the 2026-07-12 observability metrics validation window.
+Use this addendum when continuing the project after the 2026-07-12 observability metrics validation window and the subsequent DB service alert-rule baseline preparation.
 
 ## Fixed project theme
 
@@ -38,6 +38,7 @@ Phase 3. restore-lab DB/file/API recovery validation: completed
 Phase 4A. observability logs/service/request-path baseline evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
+Phase 4D. Prometheus DB service alert-rule baseline: prepared, runtime validation pending
 ```
 
 ## Recently merged PRs
@@ -50,6 +51,8 @@ PR #128 [ANSIBLE] Add Prometheus scrape observability baseline
 PR #129 [DOCS] Add observability metrics runtime validation plan
 PR #130 [FIX] Wait for Prometheus scrape targets before evidence
 PR #131 [VALIDATION] Document observability metrics evidence
+PR #132 [DOCS] Update roadmap after observability metrics validation
+PR #133 [ALERT] Add Prometheus DB service alert baseline
 ```
 
 ## Metrics runtime evidence window
@@ -197,12 +200,48 @@ The environment was not recreated. The same runtime window was used to:
 
 This is an important operating lesson: Prometheus `/-/ready` only proves that the server is ready, not that scrape targets have been registered and are healthy.
 
+## DB service alert baseline prepared after metrics validation
+
+PR #133 added:
+
+```text
+infra/ansible/playbooks/observability-prometheus-db-service-alert-baseline.yml
+docs/03-runbooks/observability-prometheus-db-service-alert-baseline.md
+```
+
+The alert-rule baseline is prepared but not yet runtime-validated.
+
+The rule intentionally does not evaluate `/readyz` because the current Prometheus baseline scrapes node_exporter only. It does not scrape application-specific metrics and does not use blackbox exporter.
+
+Instead, the alert baseline uses node_exporter systemd metrics to detect this narrow condition:
+
+```text
+DB host remains reachable from Prometheus, but postgresql.service is not active.
+```
+
+PromQL design:
+
+```promql
+up{job="node-exporter-operating-nodes",instance="<db-primary-01>:9100"} == 1
+and on(instance, job)
+node_systemd_unit_state{job="node-exporter-operating-nodes",instance="<db-primary-01>:9100",name="postgresql.service",state="active"} == 0
+```
+
+The `on(instance, job)` vector matching is intentional because `up` and `node_systemd_unit_state` have different label sets.
+
+Safety default:
+
+```text
+observability_run_db_alert_incident=false
+```
+
 ## Do not claim
 
 ```text
 production monitoring maturity
 Grafana dashboard readiness
 Alertmanager notification maturity
+paging or on-call workflow
 PostgreSQL HA
 automatic failover
 SLO/SLA compliance
@@ -215,13 +254,19 @@ Do not jump to Grafana polish first.
 Recommended next direction:
 
 ```text
-[ALERT] Add minimal Prometheus alert rule for DB service dependency evidence
+[VALIDATION] Run Prometheus DB service alert rule evidence
 ```
 
 The purpose should be narrow:
 
 ```text
-Add one or two Prometheus alert rules and validate the rule evaluation path, not Alertmanager notification maturity.
+Validate Prometheus rule evaluation for PostgreSQL service inactivity while the DB host remains reachable.
+```
+
+Expected future runtime claim after evidence:
+
+```text
+Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
 ```
 
 Alternative next direction:
@@ -230,4 +275,12 @@ Alternative next direction:
 [LOGS] Add minimal log query evidence for Nginx/app incident correlation
 ```
 
-Avoid opening another AWS runtime window until the next validation scenario is prepared.
+Avoid opening another AWS runtime window until the alert-rule validation sequence is prepared and can be completed in a single apply/configure/validate/destroy cycle.
+
+## Continuation addendum
+
+For the next conversation, also read:
+
+```text
+docs/00-project/current-state-after-db-service-alert-baseline.md
+```
