@@ -1,0 +1,10 @@
+---
+# Default observability variables for the lab-full-ops inventory.
+#
+# The controlled DB-service incident play runs from the WEB tier and delegates
+# PostgreSQL stop/start operations to the DB tier. Keep the default explicit so
+# future validation runs do not need an ad hoc --extra-vars workaround.
+#
+# Operators may still override this with:
+#   -e "observability_db_target=<db-host>"
+observability_db_target: "{{ groups['db'][0] | default('db-primary-01') }}"
