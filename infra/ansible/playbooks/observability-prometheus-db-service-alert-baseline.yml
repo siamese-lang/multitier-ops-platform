@@ -1,0 +1,482 @@
+---
+- name: Enable node exporter systemd collector on the DB tier
+  hosts: db
+  become: true
+  gather_facts: true
+
+  vars:
+    observability_project_name: "{{ project_name | default('multitier-ops-platform') }}"
+    observability_environment_name: "{{ environment_name | default('lab-full-ops') }}"
+    observability_node_exporter_service_name: prometheus-node-exporter
+    observability_node_exporter_port: 9100
+    observability_remote_report_dir: /tmp/multitier-ops-platform/prometheus-db-service-alert
+    observability_controller_evidence_dir: /tmp/observability-db-service-alert-validation
+    observability_fetch_to_controller: true
+
+  pre_tasks:
+    - name: Assert this play targets the DB tier
+      ansible.builtin.assert:
+        that:
+          - "'db' in group_names"
+        fail_msg: >-
+          observability-prometheus-db-service-alert-baseline.yml must enable
+          DB service metrics only on DB inventory hosts.
+
+    - name: Ensure controller evidence directory exists when fetch is enabled
+      ansible.builtin.file:
+        path: "{{ observability_controller_evidence_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: observability_fetch_to_controller | bool
+
+  tasks:
+    - name: Install node exporter package
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+
+    - name: Ensure node exporter systemd override directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus-node-exporter.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Enable node exporter systemd collector for DB service-state evidence
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus-node-exporter.service.d/10-systemd-collector.conf
+        mode: "0644"
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/prometheus-node-exporter --collector.systemd
+      notify: Restart node exporter
+
+    - name: Flush node exporter restart before evidence checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for node exporter local endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics"
+        method: GET
+        status_code: 200
+        return_content: false
+      register: db_node_exporter_ready
+      retries: 20
+      delay: 3
+      until: db_node_exporter_ready.status == 200
+      changed_when: false
+
+    - name: Wait for PostgreSQL systemd metric on DB node
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for i in $(seq 1 20); do
+          if curl -fsS "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics" \
+            | grep -q 'node_systemd_unit_state.*name="postgresql.service".*state="active"'; then
+            exit 0
+          fi
+          sleep 3
+        done
+        curl -fsS "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics" \
+          | grep 'node_systemd_unit_state.*postgresql.service' || true
+        exit 1
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure remote DB service alert evidence directory exists
+      ansible.builtin.file:
+        path: "{{ observability_remote_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Collect DB node exporter systemd metric evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        report_file="{{ observability_remote_report_dir }}/db-node-exporter-systemd-{{ inventory_hostname }}.txt"
+        metrics_file="$(mktemp)"
+        trap 'rm -f "${metrics_file}"' EXIT
+
+        curl -fsS "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics" > "${metrics_file}"
+
+        {
+          echo "project={{ observability_project_name }}"
+          echo "environment={{ observability_environment_name }}"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "ansible_host={{ ansible_host | default('n/a') }}"
+          echo "collected_at=$(date -Is)"
+          echo
+          echo "--- node_exporter_service_state ---"
+          systemctl is-active "{{ observability_node_exporter_service_name }}" || true
+          echo
+          echo "--- node_exporter_service_override ---"
+          systemctl cat "{{ observability_node_exporter_service_name }}" || true
+          echo
+          echo "--- postgresql_service_state ---"
+          systemctl is-active postgresql || true
+          echo
+          echo "--- postgresql_systemd_metrics ---"
+          grep 'node_systemd_unit_state.*postgresql.service' "${metrics_file}" || true
+        } > "${report_file}"
+
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      register: db_systemd_metric_report
+      changed_when: false
+
+    - name: Fetch DB systemd metric evidence to controller
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/db-node-exporter-systemd-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Show DB systemd metric evidence summary
+      ansible.builtin.debug:
+        var: db_systemd_metric_report.stdout_lines
+
+  handlers:
+    - name: Restart node exporter
+      ansible.builtin.systemd:
+        name: "{{ observability_node_exporter_service_name }}"
+        daemon_reload: true
+        state: restarted
+        enabled: true
+
+- name: Configure Prometheus DB service alert rule baseline
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    observability_project_name: "{{ project_name | default('multitier-ops-platform') }}"
+    observability_environment_name: "{{ environment_name | default('lab-full-ops') }}"
+    observability_remote_report_dir: /tmp/multitier-ops-platform/prometheus-db-service-alert
+    observability_controller_evidence_dir: /tmp/observability-db-service-alert-validation
+    observability_fetch_to_controller: true
+
+    prometheus_service_name: prometheus
+    prometheus_config_file: /etc/prometheus/prometheus.yml
+    prometheus_rule_dir: /etc/prometheus/rules
+    prometheus_db_service_rule_file: /etc/prometheus/rules/db-service.rules.yml
+    prometheus_listen_url: http://127.0.0.1:9090
+    prometheus_node_exporter_port: 9100
+    prometheus_scrape_interval: 15s
+    prometheus_evaluation_interval: 15s
+    prometheus_target_groups:
+      - web
+      - app
+      - db
+      - storage
+      - backup
+
+    observability_db_target: "{{ groups['db'][0] | default('db-primary-01') }}"
+    observability_alert_name: DbPostgresqlServiceInactiveWhileHostReachable
+    observability_run_db_alert_incident: false
+    observability_alert_wait_seconds: 60
+
+  pre_tasks:
+    - name: Assert this play runs on the monitoring tier
+      ansible.builtin.assert:
+        that:
+          - "'monitoring' in group_names"
+        fail_msg: >-
+          observability-prometheus-db-service-alert-baseline.yml must run on mon-01
+          in the monitoring group. Enable the monitoring node and populate
+          inventories/lab-full-ops/hosts.yml before running this playbook.
+
+    - name: Assert DB target exists
+      ansible.builtin.assert:
+        that:
+          - observability_db_target in groups['db']
+          - hostvars[observability_db_target].ansible_host is defined
+        fail_msg: >-
+          observability_db_target must refer to a DB inventory host with ansible_host defined.
+
+    - name: Assert scrape target groups exist
+      ansible.builtin.assert:
+        that:
+          - groups[item] is defined
+          - groups[item] | length > 0
+        fail_msg: "Missing or empty Prometheus scrape target group: {{ item }}"
+      loop: "{{ prometheus_target_groups }}"
+
+    - name: Ensure controller evidence directory exists when fetch is enabled
+      ansible.builtin.file:
+        path: "{{ observability_controller_evidence_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: observability_fetch_to_controller | bool
+
+  tasks:
+    - name: Install Prometheus package
+      ansible.builtin.apt:
+        name: prometheus
+        state: present
+        update_cache: true
+
+    - name: Build Prometheus node exporter target list
+      ansible.builtin.set_fact:
+        prometheus_node_exporter_targets: "{{ prometheus_node_exporter_targets | default([]) + [hostvars[item].ansible_host ~ ':' ~ prometheus_node_exporter_port] }}"
+      loop: "{{ prometheus_target_groups | map('extract', groups) | flatten }}"
+
+    - name: Set DB node exporter alert target
+      ansible.builtin.set_fact:
+        observability_db_node_exporter_instance: "{{ hostvars[observability_db_target].ansible_host }}:{{ prometheus_node_exporter_port }}"
+
+    - name: Ensure Prometheus rule directory exists
+      ansible.builtin.file:
+        path: "{{ prometheus_rule_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write DB service alert rule file
+      ansible.builtin.copy:
+        dest: "{{ prometheus_db_service_rule_file }}"
+        mode: "0644"
+        content: |
+          groups:
+            - name: db-service-dependency.rules
+              rules:
+                - alert: {{ observability_alert_name }}
+                  expr: |
+                    up{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}"} == 1
+                    and on(instance, job)
+                    node_systemd_unit_state{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}",name="postgresql.service",state="active"} == 0
+                  for: 30s
+                  labels:
+                    severity: warning
+                    tier: db
+                    service: postgresql
+                    environment: {{ observability_environment_name }}
+                  annotations:
+                    summary: "PostgreSQL service is inactive while the DB host remains reachable"
+                    description: "db-primary-01 node_exporter is reachable, but postgresql.service is not active. This distinguishes DB host reachability from DB service dependency failure."
+      notify: Restart Prometheus
+
+    - name: Write Prometheus scrape and rule configuration
+      ansible.builtin.copy:
+        dest: "{{ prometheus_config_file }}"
+        mode: "0644"
+        backup: true
+        content: |
+          global:
+            scrape_interval: {{ prometheus_scrape_interval }}
+            evaluation_interval: {{ prometheus_evaluation_interval }}
+
+          rule_files:
+            - "{{ prometheus_rule_dir }}/*.yml"
+
+          scrape_configs:
+            - job_name: "node-exporter-operating-nodes"
+              static_configs:
+                - targets:
+          {% for target in prometheus_node_exporter_targets | sort %}
+                    - "{{ target }}"
+          {% endfor %}
+                  labels:
+                    project: "{{ observability_project_name }}"
+                    environment: "{{ observability_environment_name }}"
+                    topology: "ec2-web-was-db-storage-backup"
+      notify: Restart Prometheus
+
+    - name: Validate Prometheus rule syntax
+      ansible.builtin.command: "promtool check rules {{ prometheus_db_service_rule_file }}"
+      register: prometheus_rule_check
+      changed_when: false
+
+    - name: Validate Prometheus configuration syntax
+      ansible.builtin.command: "promtool check config {{ prometheus_config_file }}"
+      register: prometheus_config_check
+      changed_when: false
+
+    - name: Flush Prometheus restart before runtime evidence checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Prometheus HTTP endpoint
+      ansible.builtin.uri:
+        url: "{{ prometheus_listen_url }}/-/ready"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: prometheus_ready_check
+      retries: 20
+      delay: 3
+      until: prometheus_ready_check.status == 200
+      changed_when: false
+
+    - name: Wait for DB systemd metric through Prometheus
+      ansible.builtin.shell: |
+        set -euo pipefail
+        query='node_systemd_unit_state{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}",name="postgresql.service",state="active"}'
+        for i in $(seq 1 20); do
+          result="$(curl -fsS -G "{{ prometheus_listen_url }}/api/v1/query" --data-urlencode "query=${query}")"
+          if echo "${result}" | grep -q '"result".*"value"'; then
+            echo "${result}"
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "${result:-no_result}"
+        exit 1
+      args:
+        executable: /bin/bash
+      register: prometheus_db_systemd_metric_wait
+      changed_when: false
+
+    - name: Wait for DB service alert rule to load
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for i in $(seq 1 20); do
+          result="$(curl -fsS "{{ prometheus_listen_url }}/api/v1/rules")"
+          if echo "${result}" | grep -q '{{ observability_alert_name }}'; then
+            echo "${result}"
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "${result:-no_result}"
+        exit 1
+      args:
+        executable: /bin/bash
+      register: prometheus_rule_load_wait
+      changed_when: false
+
+    - name: Ensure remote Prometheus DB service alert evidence directory exists
+      ansible.builtin.file:
+        path: "{{ observability_remote_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Collect Prometheus DB service alert baseline evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        report_file="{{ observability_remote_report_dir }}/prometheus-db-service-alert-baseline-{{ inventory_hostname }}.txt"
+        db_service_query='node_systemd_unit_state{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}",name="postgresql.service",state="active"}'
+        alert_query='ALERTS{alertname="{{ observability_alert_name }}"}'
+
+        {
+          echo "project={{ observability_project_name }}"
+          echo "environment={{ observability_environment_name }}"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "ansible_host={{ ansible_host | default('n/a') }}"
+          echo "db_target={{ observability_db_target }}"
+          echo "db_node_exporter_instance={{ observability_db_node_exporter_instance }}"
+          echo "alert_name={{ observability_alert_name }}"
+          echo "collected_at=$(date -Is)"
+          echo
+          echo "--- prometheus_service_state ---"
+          systemctl is-active {{ prometheus_service_name }} || true
+          echo
+          echo "--- prometheus_rule_check ---"
+          promtool check rules {{ prometheus_db_service_rule_file }} || true
+          echo
+          echo "--- prometheus_config_check ---"
+          promtool check config {{ prometheus_config_file }} || true
+          echo
+          echo "--- prometheus_rule_file ---"
+          cat {{ prometheus_db_service_rule_file }} || true
+          echo
+          echo "--- prometheus_rules_api ---"
+          curl -fsS {{ prometheus_listen_url }}/api/v1/rules || true
+          echo
+          echo "--- db_systemd_metric_query ---"
+          curl -fsS -G {{ prometheus_listen_url }}/api/v1/query --data-urlencode "query=${db_service_query}" || true
+          echo
+          echo "--- alert_query_normal_state ---"
+          curl -fsS -G {{ prometheus_listen_url }}/api/v1/query --data-urlencode "query=${alert_query}" || true
+        } > "${report_file}"
+
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      register: prometheus_db_service_alert_report
+      changed_when: false
+
+    - name: Fetch Prometheus DB service alert evidence to controller
+      ansible.builtin.fetch:
+        src: "{{ observability_remote_report_dir }}/prometheus-db-service-alert-baseline-{{ inventory_hostname }}.txt"
+        dest: "{{ observability_controller_evidence_dir }}/"
+        flat: true
+      when: observability_fetch_to_controller | bool
+
+    - name: Optionally validate alert firing during PostgreSQL service incident
+      when: observability_run_db_alert_incident | bool
+      block:
+        - name: Stop PostgreSQL service for alert evaluation incident
+          ansible.builtin.service:
+            name: postgresql
+            state: stopped
+          delegate_to: "{{ observability_db_target }}"
+
+        - name: Wait for DB service alert to become firing
+          ansible.builtin.shell: |
+            set -euo pipefail
+            query='ALERTS{alertname="{{ observability_alert_name }}",alertstate="firing"}'
+            report_file="{{ observability_remote_report_dir }}/prometheus-db-service-alert-incident-{{ inventory_hostname }}.txt"
+            sleep {{ observability_alert_wait_seconds }}
+            for i in $(seq 1 20); do
+              result="$(curl -fsS -G "{{ prometheus_listen_url }}/api/v1/query" --data-urlencode "query=${query}")"
+              if echo "${result}" | grep -q '"result".*"value"'; then
+                {
+                  echo "project={{ observability_project_name }}"
+                  echo "environment={{ observability_environment_name }}"
+                  echo "scenario=postgresql_service_stopped_alert_evaluation"
+                  echo "db_target={{ observability_db_target }}"
+                  echo "db_node_exporter_instance={{ observability_db_node_exporter_instance }}"
+                  echo "alert_name={{ observability_alert_name }}"
+                  echo "collected_at=$(date -Is)"
+                  echo
+                  echo "--- firing_alert_query ---"
+                  echo "${result}"
+                  echo
+                  echo "--- db_active_metric_query ---"
+                  curl -fsS -G "{{ prometheus_listen_url }}/api/v1/query" --data-urlencode 'query=node_systemd_unit_state{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}",name="postgresql.service",state="active"}' || true
+                  echo
+                  echo "--- db_host_up_query ---"
+                  curl -fsS -G "{{ prometheus_listen_url }}/api/v1/query" --data-urlencode 'query=up{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}"}' || true
+                } > "${report_file}"
+                cat "${report_file}"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "${result:-no_result}"
+            exit 1
+          args:
+            executable: /bin/bash
+          register: prometheus_db_service_alert_incident_report
+          changed_when: false
+
+        - name: Fetch Prometheus DB service alert incident evidence to controller
+          ansible.builtin.fetch:
+            src: "{{ observability_remote_report_dir }}/prometheus-db-service-alert-incident-{{ inventory_hostname }}.txt"
+            dest: "{{ observability_controller_evidence_dir }}/"
+            flat: true
+          when: observability_fetch_to_controller | bool
+
+      always:
+        - name: Restart PostgreSQL service after optional alert incident
+          ansible.builtin.service:
+            name: postgresql
+            state: started
+          delegate_to: "{{ observability_db_target }}"
+          when: observability_run_db_alert_incident | bool
+
+    - name: Show Prometheus DB service alert evidence summary
+      ansible.builtin.debug:
+        var: prometheus_db_service_alert_report.stdout_lines
+
+  handlers:
+    - name: Restart Prometheus
+      ansible.builtin.service:
+        name: "{{ prometheus_service_name }}"
+        state: restarted
+        enabled: true
