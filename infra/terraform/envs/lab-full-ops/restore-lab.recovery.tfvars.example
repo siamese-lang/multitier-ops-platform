@@ -1,0 +1,78 @@
+# restore-lab recovery validation profile
+#
+# Copy this file to a local .tfvars file only when opening an explicit
+# restore-lab runtime validation window. Do not commit real operator CIDRs,
+# key names, secrets, Terraform state, or generated plans.
+#
+# Purpose:
+# - Reuse the lab-full-ops Terraform environment as a clearly separated
+#   restore-lab infrastructure profile.
+# - Create only the nodes required to prove DB/file recovery from preserved
+#   backup artifacts.
+# - Keep Terraform as a temporary lab lifecycle tool, not the project theme.
+
+# Keep the same project name so repository/project tags remain consistent.
+project_name = "multitier-ops-platform"
+
+# This is the key distinction from the source validation environment.
+# The resulting tags and name prefix identify this apply as restore-lab,
+# not as the original lab-full-ops source environment.
+environment = "restore-lab"
+
+# Use a different CIDR range from the completed source lab to avoid confusing
+# old evidence, SSH known_hosts entries, and restored-environment outputs.
+vpc_cidr                    = "10.60.0.0/16"
+public_subnet_cidr          = "10.60.1.0/24"
+private_app_subnet_cidr     = "10.60.11.0/24"
+private_db_subnet_cidr      = "10.60.21.0/24"
+private_storage_subnet_cidr = "10.60.31.0/24"
+private_ops_subnet_cidr     = "10.60.41.0/24"
+
+# Fill these locally before planning.
+operator_cidr    = "<operator-public-ip>/32"
+web_ingress_cidr = "<operator-public-ip>/32"
+key_name         = "<existing-ec2-key-pair-name>"
+
+# First restore proof topology:
+# - bastion-01
+# - nginx-01
+# - app-01
+# - db-primary-01
+# - nfs-01
+# - backup-01
+#
+# Optional observability, logging, load generation, and second app node are
+# intentionally excluded from the first recovery proof.
+enable_app_02          = false
+enable_storage_node    = true
+enable_backup_node     = true
+enable_monitoring_node = false
+enable_logging_node    = false
+enable_loadgen_node    = false
+
+# NAT is intentionally enabled for the first restore-lab runtime window because
+# private nodes need package installation before pg_restore/restic restore
+# automation is fully packaged. Keep the window short and destroy immediately
+# after evidence collection.
+enable_nat_gateway = true
+
+# Keep instance sizes and volumes small for the short-lived validation window.
+bastion_instance_type = "t3.micro"
+nginx_instance_type   = "t3.micro"
+app_instance_type     = "t3.micro"
+db_instance_type      = "t3.micro"
+storage_instance_type = "t3.micro"
+backup_instance_type  = "t3.micro"
+
+root_volume_size_gib         = 8
+storage_root_volume_size_gib = 8
+backup_root_volume_size_gib  = 8
+
+enable_detailed_monitoring = false
+
+extra_tags = {
+  ValidationPhase = "restore-lab"
+  RecoveryInput   = "lab-full-ops-backup-20260712T072623"
+  RestoreStatus   = "not-validated-at-apply"
+  RuntimePolicy   = "destroy-after-evidence"
+}
