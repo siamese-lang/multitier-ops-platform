@@ -75,7 +75,7 @@
         set -euo pipefail
         for i in $(seq 1 20); do
           if curl -fsS "http://127.0.0.1:{{ observability_node_exporter_port }}/metrics" \
-            | grep -q 'node_systemd_unit_state{name="postgresql.service",state="active"'; then
+            | grep -q 'node_systemd_unit_state.*name="postgresql.service".*state="active"'; then
             exit 0
           fi
           sleep 3
@@ -248,7 +248,7 @@
                 - alert: {{ observability_alert_name }}
                   expr: |
                     up{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}"} == 1
-                    and
+                    and on(instance, job)
                     node_systemd_unit_state{job="node-exporter-operating-nodes",instance="{{ observability_db_node_exporter_instance }}",name="postgresql.service",state="active"} == 0
                   for: 30s
                   labels:
