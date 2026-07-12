@@ -91,6 +91,23 @@ public class WorkOrderController {
         }
     }
 
+    @GetMapping("/api/work-orders/{id}/events")
+    public ResponseEntity<Map<String, Object>> events(@PathVariable long id) {
+        long startedAt = System.nanoTime();
+        try {
+            Map<String, Object> workOrder = workOrderRepository.findById(id);
+            if (workOrder == null) {
+                return notFound("work order not found: " + id, "work_orders.events", startedAt);
+            }
+            Map<String, Object> response = response("ok", "work_orders.events", startedAt);
+            response.put("workOrder", workOrder);
+            response.put("data", workOrderRepository.findEventsByWorkOrderId(id));
+            return ResponseEntity.ok(response);
+        } catch (IllegalStateException | SQLException ex) {
+            return dbUnavailable(ex, "work_orders.events", startedAt);
+        }
+    }
+
     @GetMapping("/api/work-orders/summary")
     public ResponseEntity<Map<String, Object>> summary() {
         long startedAt = System.nanoTime();
@@ -100,6 +117,18 @@ public class WorkOrderController {
             return ResponseEntity.ok(response);
         } catch (IllegalStateException | SQLException ex) {
             return dbUnavailable(ex, "work_orders.summary", startedAt);
+        }
+    }
+
+    @GetMapping("/api/audit-logs")
+    public ResponseEntity<Map<String, Object>> auditLogs(@RequestParam(defaultValue = "20") int limit) {
+        long startedAt = System.nanoTime();
+        try {
+            Map<String, Object> response = response("ok", "audit_logs.list", startedAt);
+            response.put("data", workOrderRepository.findRecentAuditLogs(limit));
+            return ResponseEntity.ok(response);
+        } catch (IllegalStateException | SQLException ex) {
+            return dbUnavailable(ex, "audit_logs.list", startedAt);
         }
     }
 
