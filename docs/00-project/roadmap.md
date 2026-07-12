@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap separates completed validation work from service-completion work and optional future expansion.
+This roadmap separates completed runtime validation, completed service implementation baseline, and remaining enhanced-service validation work.
 
 The fixed project theme is:
 
@@ -26,7 +26,11 @@ Phase 4A. observability logs/service/request-path evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
-Phase 5. ops-sample-service completion: current focus
+Phase 5A. ops-sample-service domain/schema: implemented
+Phase 5B. server-rendered work-order web workflow: implemented
+Phase 5C. evidence upload/download workflow: implemented
+Phase 5D. WEB/WAS failure-lab endpoints: implemented
+Phase 5E. enhanced-service validation and evidence refresh: current focus
 ```
 
 ## Phase 4 freeze decision
@@ -46,7 +50,7 @@ AWS managed architecture replacement
 SLO/SLA compliance work
 ```
 
-The next work should be service completion, not another observability feature.
+The next work should be enhanced-service validation, not another observability feature.
 
 ## Completed operating evidence
 
@@ -281,38 +285,56 @@ Key evidence:
 docs/04-evidence/observability-alert-validation-2026-07-12.md
 ```
 
-## Current focus: Phase 5 service completion
+## Completed service implementation baseline
+
+`ops-sample-service` is now implemented as:
+
+```text
+운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스
+```
+
+Implemented service capabilities:
+
+```text
+work-order domain/schema
+server-rendered web UI
+work-order list/detail/create/status-change workflow
+status history and operation audit logs
+evidence upload/download workflow
+PostgreSQL metadata + file storage object consistency path
+WEB/WAS failure-lab page and APIs
+```
+
+Relevant app docs:
+
+```text
+apps/ops-sample-service/README.md
+apps/ops-sample-service/FAILURE_LAB.md
+docs/00-project/ops-sample-service-completion-scope.md
+```
+
+## Current focus: Phase 5E enhanced-service validation
 
 The next work should not create AWS resources by default.
 
 Current focus:
 
 ```text
-ops-sample-service를 작업 요청·증빙 파일 관리형 경량 웹 업무 서비스로 보강
-service domain/schema
-server-rendered web UI
-status transition and event history
-evidence upload/download workflow
-operations dashboard and failure lab
-validation playbooks for enhanced workflow
-```
-
-Source-of-truth design document:
-
-```text
-docs/00-project/ops-sample-service-completion-scope.md
+Ansible validation prep for enhanced web workflow
+static syntax and playbook checks
+one planned runtime validation window only when ready
+collect enhanced-service evidence
+destroy once
+refresh evidence docs
 ```
 
 Recommended next PR categories:
 
 ```text
-[APP] Add work order domain and schema
-[APP] Add basic server-rendered web UI
-[APP] Add evidence upload/download workflow
-[APP] Add status transition and event history
-[APP] Add operations dashboard and failure lab
-[ANSIBLE] Add validation for enhanced service workflow
-[VALIDATION] Refresh restore-lab evidence after service completion
+[ANSIBLE] Add enhanced service workflow validation
+[VALIDATION] Document enhanced web workflow evidence
+[VALIDATION] Refresh backup/restore evidence after service completion
+[DOCS] Update evidence index after enhanced-service validation
 ```
 
 ## Runtime policy
@@ -327,6 +349,37 @@ Enhanced service validation -> one planned runtime window only
 Runtime window -> collect evidence -> destroy once
 ```
 
+## Safe claims by category
+
+Runtime evidence already supports:
+
+```text
+EC2-based WEB/WAS/DB/Storage/Backup/Observability tiers were separated and configured.
+WEB/WAS/DB normal and failure paths were validated with evidence.
+DB metadata and NFS file object consistency were validated with size and SHA-256 evidence.
+Backup artifacts were created and then restored in a separate restore-lab environment.
+Logs, service state, request-path responses, and metrics were used to narrow DB service incidents.
+Prometheus metrics distinguished DB host reachability from PostgreSQL service failure.
+Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
+```
+
+Repository implementation supports:
+
+```text
+ops-sample-service now includes a lightweight web work-order/evidence-file workflow.
+The service includes web upload/download and DB/file consistency paths.
+The service includes failure-lab endpoints for slow request, DB sleep, file storage, and upload-limit inspection.
+```
+
+Still not claimed until enhanced runtime evidence exists:
+
+```text
+completed AWS runtime validation of the enhanced web workflow
+completed AWS runtime validation of evidence upload/download through Nginx/WAS/NFS/PostgreSQL
+completed service-level Nginx timeout, thread, connection-pool, or slow-query validation
+refreshed restore-lab validation against the enhanced service model
+```
+
 ## Still not claimed
 
 ```text
@@ -339,7 +392,6 @@ automatic failover
 SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
-completed web business service workflow
-completed evidence upload/download workflow through enhanced web pages
-service-level WEB/WAS timeout, thread, connection-pool, or slow-query validation
+production service operation
+commercial ITSM implementation
 ```

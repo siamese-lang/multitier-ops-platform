@@ -39,6 +39,38 @@ cleanup status
 | Prometheus scraped node_exporter metrics from operating nodes | `docs/04-evidence/observability-metrics-validation-2026-07-12.md` |
 | Prometheus metrics distinguished DB host reachability from DB service failure | `docs/04-evidence/observability-metrics-validation-2026-07-12.md` |
 | Prometheus rule evaluation detected PostgreSQL inactivity while DB host stayed reachable | `docs/04-evidence/observability-alert-validation-2026-07-12.md` |
+| `ops-sample-service` includes a lightweight work-order/evidence-file web workflow | repository implementation: `apps/ops-sample-service/README.md`, `apps/ops-sample-service/FAILURE_LAB.md` |
+
+## Current evidence boundary
+
+Existing runtime evidence was collected before the enhanced service implementation baseline was completed.
+
+Therefore, distinguish these two categories:
+
+```text
+Runtime-validated operations evidence:
+- WEB/WAS/DB normal path
+- storage consistency
+- backup artifact creation
+- restore-lab recovery
+- observability baseline
+- Prometheus metric/rule-based DB service incident diagnosis
+
+Repository implementation evidence:
+- work-order web pages
+- status history and audit logs
+- evidence upload/download workflow
+- WEB/WAS failure-lab endpoints
+```
+
+Do not claim these until a new runtime validation window is completed:
+
+```text
+enhanced web workflow runtime validation through Nginx/WAS
+evidence upload/download runtime validation through Nginx/WAS/NFS/PostgreSQL
+failure-lab slow request and DB-sleep evidence with logs/metrics
+restore-lab refresh against the enhanced service model
+```
 
 ## Core evidence documents
 
@@ -210,6 +242,16 @@ This is rule evaluation evidence.
 It is not Alertmanager notification maturity evidence.
 ```
 
+## Service implementation references
+
+These documents describe the current enhanced service implementation, but they are not runtime evidence documents by themselves:
+
+```text
+apps/ops-sample-service/README.md
+apps/ops-sample-service/FAILURE_LAB.md
+docs/00-project/ops-sample-service-completion-scope.md
+```
+
 ## Evidence archives kept locally
 
 Known local archives from the 2026-07-12 validation windows include:
@@ -237,6 +279,8 @@ automatic failover
 SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
+commercial ITSM implementation
+enhanced web workflow runtime validation completed
 ```
 
 ## Current evidence status
@@ -245,6 +289,8 @@ AWS managed architecture operation
 Core operations evidence: sufficient for portfolio summary
 Storage/backup/restore evidence: sufficient for recovery narrative
 Observability evidence: sufficient for diagnosis narrative
+Service implementation evidence: baseline completed in repository code
+Enhanced service runtime evidence: pending validation refresh
 Prometheus extension work: frozen after alert rule evaluation
-AWS runtime: not needed for default next work
+AWS runtime: not needed for docs/static prep; needed only for planned enhanced-service validation window
 ```
