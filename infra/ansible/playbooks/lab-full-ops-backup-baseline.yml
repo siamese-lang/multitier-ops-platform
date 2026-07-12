@@ -1,0 +1,303 @@
+---
+- name: Run lab-full-ops pg_dump and file backup baseline
+  hosts: backup
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert backup baseline inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['backup'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - groups['app'] is defined
+          - groups['web'] is defined
+          - groups['backup'] | length > 0
+          - groups['db'] | length > 0
+          - groups['storage'] | length > 0
+        fail_msg: >-
+          lab-full-ops backup baseline requires backup, db, storage, app, and web
+          inventory groups. Run it only after the reduced lab-full-ops inventory is populated.
+
+    - name: Assert this playbook is limited to backup-tier hosts
+      ansible.builtin.assert:
+        that:
+          - "'backup' in group_names"
+          - node_role | default('') == 'backup'
+        fail_msg: "This playbook must run only against the lab-full-ops backup group."
+
+    - name: Assert runtime secrets are supplied outside the repository
+      ansible.builtin.assert:
+        that:
+          - ops_db_password is defined
+          - ops_db_password | length >= 12
+          - ops_db_password is match('^[A-Za-z0-9_@#%+=:,.-]+$')
+          - restic_password is defined
+          - restic_password | length >= 12
+        fail_msg: >-
+          ops_db_password and restic_password must be supplied from ignored inventory,
+          --extra-vars, or future Ansible Vault. Do not commit real backup secrets.
+
+    - name: Show backup baseline boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook prepares backup artifacts only; it does not prove restore completion."
+          - "PostgreSQL boundary: {{ lab_full_ops_backup_db_name }} via pg_dump."
+          - "File boundary: {{ lab_full_ops_backup_nfs_source }} via restic snapshot."
+          - "Run after the work-order evidence smoke has created DB metadata and NFS file objects."
+
+  tasks:
+    - name: Install backup baseline packages on backup-01
+      ansible.builtin.apt:
+        name: "{{ lab_full_ops_backup_packages }}"
+        state: present
+        update_cache: true
+      when: lab_full_ops_backup_manage_packages | bool
+
+    - name: Ensure backup directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ lab_full_ops_backup_root }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_backup_artifact_dir }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_backup_run_dir }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_backup_report_dir }}"
+          mode: "0755"
+        - path: "{{ lab_full_ops_backup_nfs_mount_path }}"
+          mode: "0755"
+        - path: "{{ lab_full_ops_backup_restic_password_file | dirname }}"
+          mode: "0750"
+
+    - name: Write restic password file
+      ansible.builtin.copy:
+        dest: "{{ lab_full_ops_backup_restic_password_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ restic_password }}\n"
+      no_log: true
+
+    - name: Ensure backup NFS source is present in fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^.*\s+{{ lab_full_ops_backup_nfs_mount_path }}\s+nfs\s+'
+        line: "{{ lab_full_ops_backup_nfs_source }} {{ lab_full_ops_backup_nfs_mount_path }} {{ lab_full_ops_backup_nfs_fstype }} {{ lab_full_ops_backup_nfs_mount_options }} 0 0"
+        state: present
+        create: false
+        backup: true
+
+    - name: Check whether backup NFS source is already mounted
+      ansible.builtin.command: "mountpoint -q {{ lab_full_ops_backup_nfs_mount_path }}"
+      register: lab_full_ops_backup_nfs_pre_mountpoint
+      changed_when: false
+      failed_when: false
+
+    - name: Mount backup NFS source from fstab entry
+      ansible.builtin.command: "mount {{ lab_full_ops_backup_nfs_mount_path }}"
+      register: lab_full_ops_backup_nfs_mount_command
+      changed_when: lab_full_ops_backup_nfs_mount_command.rc == 0
+      failed_when:
+        - lab_full_ops_backup_nfs_mount_command.rc != 0
+        - "'already mounted' not in lab_full_ops_backup_nfs_mount_command.stderr"
+      when: lab_full_ops_backup_nfs_pre_mountpoint.rc != 0
+
+    - name: Verify backup NFS mountpoint
+      ansible.builtin.command: "mountpoint -q {{ lab_full_ops_backup_nfs_mount_path }}"
+      changed_when: false
+
+    - name: Display backup NFS mount details
+      ansible.builtin.command: "findmnt --target {{ lab_full_ops_backup_nfs_mount_path }} --output SOURCE,TARGET,FSTYPE,OPTIONS --noheadings"
+      changed_when: false
+      register: lab_full_ops_backup_nfs_findmnt
+
+    - name: Create PostgreSQL dump, NFS file inventory, restic snapshot, and manifest
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        backup_id="{{ lab_full_ops_backup_id }}"
+        run_dir="{{ lab_full_ops_backup_run_dir }}"
+        source_dir="{{ lab_full_ops_backup_nfs_mount_path }}"
+        dump_file="{{ lab_full_ops_backup_pg_dump_file }}"
+        file_inventory="{{ lab_full_ops_backup_file_inventory }}"
+        checksum_list="{{ lab_full_ops_backup_checksum_list }}"
+        manifest_file="{{ lab_full_ops_backup_manifest_file }}"
+        restic_repo="{{ lab_full_ops_backup_restic_repository }}"
+        restic_password_file="{{ lab_full_ops_backup_restic_password_file }}"
+        restic_backup_log="{{ lab_full_ops_backup_restic_backup_log }}"
+        restic_snapshot_summary="{{ lab_full_ops_backup_restic_snapshot_summary }}"
+        report_file="{{ lab_full_ops_backup_report_file }}"
+        min_file_count="{{ lab_full_ops_backup_min_file_count }}"
+
+        mkdir -p "${run_dir}"
+        started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        pg_dump \
+          -h "{{ lab_full_ops_backup_db_host }}" \
+          -p "{{ lab_full_ops_backup_db_port }}" \
+          -U "{{ lab_full_ops_backup_db_user }}" \
+          -d "{{ lab_full_ops_backup_db_name }}" \
+          -F c \
+          --no-owner \
+          --no-acl \
+          -f "${dump_file}"
+
+        dump_size_bytes=$(stat -c '%s' "${dump_file}")
+        dump_sha256=$(sha256sum "${dump_file}" | awk '{print $1}')
+
+        metadata_counts=$(psql \
+          -h "{{ lab_full_ops_backup_db_host }}" \
+          -p "{{ lab_full_ops_backup_db_port }}" \
+          -U "{{ lab_full_ops_backup_db_user }}" \
+          -d "{{ lab_full_ops_backup_db_name }}" \
+          -AtF $'\t' \
+          -c "select 'ops_work_orders', count(*) from ops_work_orders union all select 'ops_work_order_evidence_files', count(*) from ops_work_order_evidence_files order by 1;")
+
+        sample_metadata=$(psql \
+          -h "{{ lab_full_ops_backup_db_host }}" \
+          -p "{{ lab_full_ops_backup_db_port }}" \
+          -U "{{ lab_full_ops_backup_db_user }}" \
+          -d "{{ lab_full_ops_backup_db_name }}" \
+          -AtF $'\t' \
+          -c "select id, work_order_id, storage_path, size_bytes, sha256 from ops_work_order_evidence_files order by id desc limit 1;")
+        metadata_counts_inline=$(printf '%s\n' "${metadata_counts}" | paste -sd ',' -)
+
+        if [ -z "${sample_metadata}" ]; then
+          echo "No ops_work_order_evidence_files row exists. Run lab-full-ops-work-order-evidence-smoke.yml before backup." >&2
+          exit 1
+        fi
+
+        find "${source_dir}" -type f -printf '%P\t%s\t%TY-%Tm-%TdT%TH:%TM:%TS%TZ\n' | sort > "${file_inventory}"
+        file_count=$(wc -l < "${file_inventory}" | tr -d ' ')
+        test "${file_count}" -ge "${min_file_count}"
+
+        (
+          cd "${source_dir}"
+          find . -type f -print0 | sort -z | xargs -0 -r sha256sum
+        ) > "${checksum_list}"
+
+        if restic -r "${restic_repo}" --password-file "${restic_password_file}" snapshots >/dev/null 2>&1; then
+          restic_repo_state=existing
+        else
+          restic -r "${restic_repo}" --password-file "${restic_password_file}" init
+          restic_repo_state=created
+        fi
+
+        restic \
+          -r "${restic_repo}" \
+          --password-file "${restic_password_file}" \
+          backup "${source_dir}" \
+          --tag lab-full-ops \
+          --tag "${backup_id}" \
+          --json \
+          > "${restic_backup_log}"
+
+        snapshot_id=$(python3 - "${restic_backup_log}" <<'PY'
+        import json
+        import sys
+
+        snapshot_id = ""
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if item.get("message_type") == "summary" and item.get("snapshot_id"):
+                    snapshot_id = item["snapshot_id"]
+
+        if not snapshot_id:
+            raise SystemExit("snapshot_id_not_found")
+        print(snapshot_id)
+        PY
+        )
+
+        restic \
+          -r "${restic_repo}" \
+          --password-file "${restic_password_file}" \
+          snapshots "${snapshot_id}" \
+          > "${restic_snapshot_summary}"
+
+        finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        cat > "${manifest_file}" <<EOF_MANIFEST
+        project={{ project_name }}
+        environment={{ environment_name }}
+        backup_id=${backup_id}
+        backup_started_at=${started_at}
+        backup_finished_at=${finished_at}
+        backup_node={{ inventory_hostname }}
+        db_host={{ lab_full_ops_backup_db_host }}
+        db_name={{ lab_full_ops_backup_db_name }}
+        db_user={{ lab_full_ops_backup_db_user }}
+        pg_dump_file=${dump_file}
+        pg_dump_size_bytes=${dump_size_bytes}
+        pg_dump_sha256=${dump_sha256}
+        nfs_source={{ lab_full_ops_backup_nfs_source }}
+        nfs_mount_path=${source_dir}
+        nfs_file_inventory=${file_inventory}
+        nfs_checksum_list=${checksum_list}
+        nfs_file_count=${file_count}
+        restic_repository=${restic_repo}
+        restic_repo_state=${restic_repo_state}
+        restic_snapshot_id=${snapshot_id}
+        restic_backup_log=${restic_backup_log}
+        restic_snapshot_summary=${restic_snapshot_summary}
+        metadata_counts=${metadata_counts_inline}
+        sample_evidence_metadata=${sample_metadata}
+        restore_status=not_validated
+        restore_note=Phase 2B creates backup artifacts only. Phase 3 restore-lab must restore DB and files and verify API consistency.
+        EOF_MANIFEST
+
+        cat > "${report_file}" <<EOF_REPORT
+        project={{ project_name }}
+        environment={{ environment_name }}
+        inventory_hostname={{ inventory_hostname }}
+        ansible_host={{ ansible_host | default('n/a') }}
+        backup_id=${backup_id}
+        backup_started_at=${started_at}
+        backup_finished_at=${finished_at}
+        db_boundary={{ lab_full_ops_backup_db_name }} via pg_dump
+        file_boundary={{ lab_full_ops_backup_nfs_source }} via restic
+        pg_dump_file=${dump_file}
+        pg_dump_size_bytes=${dump_size_bytes}
+        pg_dump_sha256=${dump_sha256}
+        nfs_file_count=${file_count}
+        nfs_file_inventory=${file_inventory}
+        nfs_checksum_list=${checksum_list}
+        restic_repository=${restic_repo}
+        restic_repo_state=${restic_repo_state}
+        restic_snapshot_id=${snapshot_id}
+        manifest_file=${manifest_file}
+        metadata_counts=${metadata_counts_inline}
+        sample_evidence_metadata=${sample_metadata}
+        findmnt={{ lab_full_ops_backup_nfs_findmnt.stdout | default('n/a') }}
+        restore_status=not_validated
+        EOF_REPORT
+
+        cat "${manifest_file}"
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ ops_db_password }}"
+      register: lab_full_ops_backup_result
+      changed_when: true
+
+    - name: Display backup baseline report
+      ansible.builtin.command: "cat {{ lab_full_ops_backup_report_file }}"
+      register: lab_full_ops_backup_report
+      changed_when: false
+
+    - name: Show backup baseline report
+      ansible.builtin.debug:
+        var: lab_full_ops_backup_report.stdout_lines
