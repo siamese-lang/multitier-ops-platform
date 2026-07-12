@@ -1,0 +1,310 @@
+---
+- name: Restore lab-full-ops backup artifacts into restore-lab DB and file tiers
+  hosts: backup
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert restore-lab inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['backup'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - groups['backup'] | length > 0
+          - groups['db'] | length > 0
+          - groups['storage'] | length > 0
+        fail_msg: >-
+          restore-lab DB/file restore requires backup, db, and storage inventory
+          groups. Run it only after the restore-lab inventory is populated from
+          Terraform outputs.
+
+    - name: Assert this playbook is limited to backup-tier hosts
+      ansible.builtin.assert:
+        that:
+          - "'backup' in group_names"
+          - node_role | default('') == 'backup'
+        fail_msg: "This playbook must run only against the restore-lab backup group."
+
+    - name: Assert runtime secrets and restore input are supplied outside the repository
+      ansible.builtin.assert:
+        that:
+          - ops_db_password is defined
+          - ops_db_password | length >= 12
+          - ops_db_password is match('^[A-Za-z0-9_@#%+=:,.-]+$')
+          - restic_password is defined
+          - restic_password | length >= 12
+          - lab_full_ops_restore_local_archive is defined
+          - lab_full_ops_restore_local_archive | length > 0
+          - lab_full_ops_restore_backup_id is defined
+          - lab_full_ops_restore_backup_id | length > 0
+        fail_msg: >-
+          ops_db_password, restic_password, and lab_full_ops_restore_local_archive
+          must be supplied from ignored inventory, --extra-vars, or the local
+          operator workspace. Do not commit real secrets or backup archives.
+
+    - name: Show restore-lab boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook restores DB/file artifacts only; it does not prove HTTP/API recovery by itself."
+          - "Restore input archive: {{ lab_full_ops_restore_local_archive }}"
+          - "DB target: {{ lab_full_ops_restore_db_host }}:{{ lab_full_ops_restore_db_port }}/{{ lab_full_ops_restore_db_name }}"
+          - "File target: {{ lab_full_ops_restore_nfs_source }} mounted at {{ lab_full_ops_restore_nfs_mount_path }}"
+          - "Expected source backup: {{ lab_full_ops_restore_backup_id }}"
+
+  tasks:
+    - name: Install restore baseline packages on backup-01
+      ansible.builtin.apt:
+        name: "{{ lab_full_ops_backup_packages }}"
+        state: present
+        update_cache: true
+      when: lab_full_ops_backup_manage_packages | bool
+
+    - name: Ensure restore directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ lab_full_ops_restore_root }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_restore_input_dir }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_restore_unpack_dir }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_restore_stage_dir }}"
+          mode: "0750"
+        - path: "{{ lab_full_ops_restore_report_dir }}"
+          mode: "0755"
+        - path: "{{ lab_full_ops_restore_nfs_mount_path }}"
+          mode: "0755"
+        - path: "{{ lab_full_ops_restore_restic_password_file | dirname }}"
+          mode: "0750"
+
+    - name: Write restic password file for restore
+      ansible.builtin.copy:
+        dest: "{{ lab_full_ops_restore_restic_password_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ restic_password }}\n"
+      no_log: true
+
+    - name: Copy preserved local backup archive to backup-01
+      ansible.builtin.copy:
+        src: "{{ lab_full_ops_restore_local_archive }}"
+        dest: "{{ lab_full_ops_restore_remote_archive }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Ensure restore NFS target is present in fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^.*\s+{{ lab_full_ops_restore_nfs_mount_path }}\s+nfs\s+'
+        line: "{{ lab_full_ops_restore_nfs_source }} {{ lab_full_ops_restore_nfs_mount_path }} {{ lab_full_ops_restore_nfs_fstype }} {{ lab_full_ops_restore_nfs_mount_options }} 0 0"
+        state: present
+        create: false
+        backup: true
+
+    - name: Check whether restore NFS target is already mounted
+      ansible.builtin.command: "mountpoint -q {{ lab_full_ops_restore_nfs_mount_path }}"
+      register: lab_full_ops_restore_nfs_pre_mountpoint
+      changed_when: false
+      failed_when: false
+
+    - name: Mount restore NFS target from fstab entry
+      ansible.builtin.command: "mount {{ lab_full_ops_restore_nfs_mount_path }}"
+      register: lab_full_ops_restore_nfs_mount_command
+      changed_when: lab_full_ops_restore_nfs_mount_command.rc == 0
+      failed_when:
+        - lab_full_ops_restore_nfs_mount_command.rc != 0
+        - "'already mounted' not in lab_full_ops_restore_nfs_mount_command.stderr"
+      when: lab_full_ops_restore_nfs_pre_mountpoint.rc != 0
+
+    - name: Verify restore NFS mountpoint
+      ansible.builtin.command: "mountpoint -q {{ lab_full_ops_restore_nfs_mount_path }}"
+      changed_when: false
+
+    - name: Display restore NFS mount details
+      ansible.builtin.command: "findmnt --target {{ lab_full_ops_restore_nfs_mount_path }} --output SOURCE,TARGET,FSTYPE,OPTIONS --noheadings"
+      changed_when: false
+      register: lab_full_ops_restore_nfs_findmnt
+
+    - name: Unpack backup archive on backup-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ lab_full_ops_restore_unpack_dir }}"/* "{{ lab_full_ops_restore_stage_dir }}"/*
+        mkdir -p "{{ lab_full_ops_restore_unpack_dir }}" "{{ lab_full_ops_restore_stage_dir }}"
+        tar -tzf "{{ lab_full_ops_restore_remote_archive }}" > "{{ lab_full_ops_restore_input_dir }}/archive-inventory.txt"
+        tar -C "{{ lab_full_ops_restore_unpack_dir }}" -xzf "{{ lab_full_ops_restore_remote_archive }}"
+        test -s "{{ lab_full_ops_restore_pg_dump_file }}"
+        test -f "{{ lab_full_ops_restore_manifest_file }}"
+        test -d "{{ lab_full_ops_restore_restic_repository }}"
+        cat "{{ lab_full_ops_restore_manifest_file }}"
+      args:
+        executable: /bin/bash
+      register: lab_full_ops_restore_unpack_result
+      changed_when: true
+
+    - name: Restore PostgreSQL dump, restore NFS files, and verify DB/file consistency
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        restore_id="restore-lab-$(date -u +%Y%m%dT%H%M%SZ)"
+        report_file="{{ lab_full_ops_restore_report_file }}"
+        manifest_file="{{ lab_full_ops_restore_manifest_file }}"
+        dump_file="{{ lab_full_ops_restore_pg_dump_file }}"
+        restic_repo="{{ lab_full_ops_restore_restic_repository }}"
+        restic_password_file="{{ lab_full_ops_restore_restic_password_file }}"
+        restore_stage="{{ lab_full_ops_restore_stage_dir }}"
+        restored_source="{{ lab_full_ops_restore_restic_original_path }}"
+        target_mount="{{ lab_full_ops_restore_nfs_mount_path }}"
+        expected_work_orders="{{ lab_full_ops_restore_expected_work_order_count }}"
+        expected_evidence_files="{{ lab_full_ops_restore_expected_evidence_file_count }}"
+        expected_sample_size="{{ lab_full_ops_restore_expected_sample_size_bytes }}"
+        expected_sample_sha="{{ lab_full_ops_restore_expected_sample_sha256 }}"
+        expected_snapshot_id="{{ lab_full_ops_restore_expected_restic_snapshot_id }}"
+
+        started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        pg_restore \
+          -h "{{ lab_full_ops_restore_db_host }}" \
+          -p "{{ lab_full_ops_restore_db_port }}" \
+          -U "{{ lab_full_ops_restore_db_user }}" \
+          -d "{{ lab_full_ops_restore_db_name }}" \
+          {{ lab_full_ops_restore_pg_restore_options }} \
+          "${dump_file}"
+
+        restored_tables=$(psql \
+          -h "{{ lab_full_ops_restore_db_host }}" \
+          -p "{{ lab_full_ops_restore_db_port }}" \
+          -U "{{ lab_full_ops_restore_db_user }}" \
+          -d "{{ lab_full_ops_restore_db_name }}" \
+          -AtF $'\t' \
+          -c "select tablename from pg_tables where schemaname='public' order by tablename;")
+
+        metadata_counts=$(psql \
+          -h "{{ lab_full_ops_restore_db_host }}" \
+          -p "{{ lab_full_ops_restore_db_port }}" \
+          -U "{{ lab_full_ops_restore_db_user }}" \
+          -d "{{ lab_full_ops_restore_db_name }}" \
+          -AtF $'\t' \
+          -c "select 'ops_work_order_evidence_files', count(*) from ops_work_order_evidence_files union all select 'ops_work_orders', count(*) from ops_work_orders order by 1;")
+        metadata_counts_inline=$(printf '%s\n' "${metadata_counts}" | paste -sd ',' -)
+
+        work_order_count=$(printf '%s\n' "${metadata_counts}" | awk -F $'\t' '$1=="ops_work_orders" {print $2}')
+        evidence_file_count=$(printf '%s\n' "${metadata_counts}" | awk -F $'\t' '$1=="ops_work_order_evidence_files" {print $2}')
+        test "${work_order_count}" = "${expected_work_orders}"
+        test "${evidence_file_count}" = "${expected_evidence_files}"
+
+        sample_metadata=$(psql \
+          -h "{{ lab_full_ops_restore_db_host }}" \
+          -p "{{ lab_full_ops_restore_db_port }}" \
+          -U "{{ lab_full_ops_restore_db_user }}" \
+          -d "{{ lab_full_ops_restore_db_name }}" \
+          -AtF $'\t' \
+          -c "select id, work_order_id, storage_path, size_bytes, sha256 from ops_work_order_evidence_files order by id desc limit 1;")
+        test -n "${sample_metadata}"
+
+        sample_storage_path=$(printf '%s\n' "${sample_metadata}" | cut -f3)
+        sample_size_bytes=$(printf '%s\n' "${sample_metadata}" | cut -f4)
+        sample_sha256=$(printf '%s\n' "${sample_metadata}" | cut -f5)
+        test "${sample_size_bytes}" = "${expected_sample_size}"
+        test "${sample_sha256}" = "${expected_sample_sha}"
+
+        snapshot_id=$(awk -F= '$1=="restic_snapshot_id" {print $2}' "${manifest_file}" | head -1)
+        if [ -z "${snapshot_id}" ]; then
+          snapshot_id="${expected_snapshot_id}"
+        fi
+
+        restic \
+          -r "${restic_repo}" \
+          --password-file "${restic_password_file}" \
+          snapshots "${snapshot_id}" \
+          > "{{ lab_full_ops_restore_input_dir }}/restic-snapshots-after-unpack.txt"
+
+        restic \
+          -r "${restic_repo}" \
+          --password-file "${restic_password_file}" \
+          restore "${snapshot_id}" \
+          --target "${restore_stage}" \
+          > "{{ lab_full_ops_restore_input_dir }}/restic-restore.txt"
+
+        test -d "${restored_source}"
+        find "${target_mount}" -mindepth 1 -exec rm -rf {} +
+        (cd "${restored_source}" && tar -cf - .) | (cd "${target_mount}" && tar -xf -)
+
+        find "${target_mount}" -type f -printf '%P\t%s\t%TY-%Tm-%TdT%TH:%TM:%TS%TZ\n' | sort > "{{ lab_full_ops_restore_input_dir }}/restored-file-inventory.txt"
+        restored_file_count=$(wc -l < "{{ lab_full_ops_restore_input_dir }}/restored-file-inventory.txt" | tr -d ' ')
+
+        sample_file="${target_mount}/${sample_storage_path}"
+        test -f "${sample_file}"
+        actual_sample_size=$(stat -c '%s' "${sample_file}")
+        actual_sample_sha=$(sha256sum "${sample_file}" | awk '{print $1}')
+        test "${actual_sample_size}" = "${expected_sample_size}"
+        test "${actual_sample_sha}" = "${expected_sample_sha}"
+
+        finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        cat > "${report_file}" <<EOF_REPORT
+        project={{ project_name }}
+        source_environment=lab-full-ops
+        restore_environment=restore-lab
+        inventory_hostname={{ inventory_hostname }}
+        ansible_host={{ ansible_host | default('n/a') }}
+        restore_id=${restore_id}
+        source_backup_id={{ lab_full_ops_restore_backup_id }}
+        restore_started_at=${started_at}
+        restore_finished_at=${finished_at}
+        local_archive={{ lab_full_ops_restore_local_archive }}
+        remote_archive={{ lab_full_ops_restore_remote_archive }}
+        manifest_file=${manifest_file}
+        pg_dump_file=${dump_file}
+        pg_restore_status=validated
+        db_host={{ lab_full_ops_restore_db_host }}
+        db_name={{ lab_full_ops_restore_db_name }}
+        restored_tables=$(printf '%s' "${restored_tables}" | paste -sd ',' -)
+        metadata_counts=${metadata_counts_inline}
+        expected_work_order_count=${expected_work_orders}
+        actual_work_order_count=${work_order_count}
+        expected_evidence_file_count=${expected_evidence_files}
+        actual_evidence_file_count=${evidence_file_count}
+        restic_repository=${restic_repo}
+        restic_snapshot_id=${snapshot_id}
+        restic_restore_status=validated
+        restore_stage=${restore_stage}
+        restored_source=${restored_source}
+        nfs_target={{ lab_full_ops_restore_nfs_source }}
+        nfs_mount_path=${target_mount}
+        restored_file_count=${restored_file_count}
+        sample_evidence_metadata=${sample_metadata}
+        sample_storage_path=${sample_storage_path}
+        expected_sample_size_bytes=${expected_sample_size}
+        actual_sample_size_bytes=${actual_sample_size}
+        expected_sample_sha256=${expected_sample_sha}
+        actual_sample_sha256=${actual_sample_sha}
+        db_file_restore_status=validated
+        http_api_restore_status=not_validated_by_this_playbook
+        restore_claim_boundary=DB/file artifacts restored and checked; full recovery still requires app and Nginx HTTP/API consistency validation.
+        findmnt={{ lab_full_ops_restore_nfs_findmnt.stdout | default('n/a') }}
+        EOF_REPORT
+
+        cat "${report_file}"
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ ops_db_password }}"
+      register: lab_full_ops_restore_result
+      changed_when: true
+
+    - name: Display restore baseline report
+      ansible.builtin.command: "cat {{ lab_full_ops_restore_report_file }}"
+      register: lab_full_ops_restore_report
+      changed_when: false
+
+    - name: Show restore baseline report
+      ansible.builtin.debug:
+        var: lab_full_ops_restore_report.stdout_lines
