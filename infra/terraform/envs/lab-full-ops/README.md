@@ -73,6 +73,56 @@ enable_nat_gateway     = true
 
 `enable_nat_gateway = true` creates NAT Gateway and EIP resources. Do not enable it for simple Ansible control-path validation.
 
+## Restore-lab recovery profile
+
+The first restore-lab proof reuses this Terraform environment with a dedicated variable profile instead of copying a second Terraform tree.
+
+```text
+infra/terraform/envs/lab-full-ops/restore-lab.recovery.tfvars.example
+```
+
+This profile changes the environment marker and CIDR range so the restored environment is not confused with the completed source `lab-full-ops` validation:
+
+```text
+environment = restore-lab
+CIDR range  = 10.60.0.0/16
+required nodes = bastion-01, nginx-01, app-01, db-primary-01, nfs-01, backup-01
+excluded nodes = app-02, mon-01, log-01, loadgen-01
+```
+
+The profile intentionally enables NAT Gateway for the first restore-lab window because private nodes still need package installation before restore automation is fully packaged. Use it only for the grouped restore validation window, then destroy immediately.
+
+Suggested local preparation:
+
+```bash
+cp restore-lab.recovery.tfvars.example restore-lab.recovery.tfvars
+```
+
+Edit only local values:
+
+```text
+operator_cidr
+web_ingress_cidr
+key_name
+```
+
+Plan and apply only when the restore-lab Ansible restore work is ready to run in the same window:
+
+```bash
+terraform plan -var-file=restore-lab.recovery.tfvars -out restore-lab.tfplan
+terraform apply restore-lab.tfplan
+terraform output
+```
+
+Destroy with the same variable file:
+
+```bash
+terraform destroy -var-file=restore-lab.recovery.tfvars
+terraform state list
+```
+
+The restore-lab profile only creates infrastructure. It does not restore PostgreSQL, restore files, deploy the app, or prove recovery by itself.
+
 ## Network intent
 
 | Flow | Purpose |
@@ -103,6 +153,7 @@ locals.tf
 main.tf
 outputs.tf
 terraform.tfvars.example
+restore-lab.recovery.tfvars.example
 ```
 
 ## Usage
@@ -153,12 +204,9 @@ This PR creates the VM and network skeleton only. It does not configure:
 
 ## Expected next issues
 
-1. `[ANSIBLE] lab-full-ops inventory/control path`
-2. `[ANSIBLE] nfs-01 file storage baseline`
-3. `[APP] minimal file metadata/upload/download operational endpoint or harness`
-4. `[INCIDENT] file storage failure and recovery drill`
-5. `[ANSIBLE] pg_dump + restic backup baseline`
-6. `[VALIDATION] restore-lab DB/file restore verification`
+1. `[ANSIBLE] restore-lab artifact injection and DB/file restore baseline`
+2. `[VALIDATION] restore-lab DB/file/API consistency evidence`
+3. `[OBS] Prometheus/Loki minimum observability after recovery path is proven`
 
 ## Cleanup
 
