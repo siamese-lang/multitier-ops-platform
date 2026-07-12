@@ -73,6 +73,16 @@
         backup: true
       notify: Restart PostgreSQL
 
+    - name: Allow additional client CIDRs to access opsdb through pg_hba
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf_dir }}/pg_hba.conf"
+        insertafter: EOF
+        line: "host    {{ ops_db_name }}    {{ ops_db_user }}    {{ item }}    scram-sha-256"
+        state: present
+        backup: true
+      loop: "{{ postgresql_additional_client_cidrs | default([]) }}"
+      notify: Restart PostgreSQL
+
     - name: Flush PostgreSQL handlers before DB/user creation
       ansible.builtin.meta: flush_handlers
 
@@ -151,6 +161,7 @@
           postgresql_service_state={{ postgresql_service_state.stdout | default('n/a') }}
           postgresql_port={{ postgresql_port }}
           lab_full_min_app_cidr={{ lab_full_min_app_cidr }}
+          postgresql_additional_client_cidrs={{ postgresql_additional_client_cidrs | default([]) }}
           ops_db_name={{ ops_db_name }}
           ops_db_user={{ ops_db_user }}
           listen_check={{ postgresql_listen_check.stdout | default('n/a') }}

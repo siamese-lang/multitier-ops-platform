@@ -17,6 +17,12 @@ postgresql_port: 5432
 lab_full_min_app_cidr: "10.50.11.0/24"
 lab_full_ops_app_cidr: "{{ lab_full_min_app_cidr }}"
 
+# lab-full-ops Terraform default private ops subnet CIDR.
+# backup-01 uses this network to run pg_dump against db-primary-01.
+lab_full_ops_backup_cidr: "10.50.41.0/24"
+postgresql_additional_client_cidrs:
+  - "{{ lab_full_ops_backup_cidr }}"
+
 ops_db_name: opsdb
 ops_db_user: ops_user
 
