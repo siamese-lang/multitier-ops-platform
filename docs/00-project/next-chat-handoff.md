@@ -14,10 +14,10 @@ Short version:
 VM 기반 WEB/WAS/DB 운영환경을 직접 구성하고, 장애·성능·복구 문제를 로그와 지표로 분석하는 운영 포트폴리오
 ```
 
-Current service direction:
+Current operated service identity:
 
 ```text
-ops-sample-service를 운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스로 보강한다.
+ops-sample-service = 운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스
 ```
 
 Do not reinterpret the project as:
@@ -57,6 +57,8 @@ Do not run Terraform from WSL. Do not run Ansible from Git Bash.
 
 ```text
 README.md
+apps/ops-sample-service/README.md
+apps/ops-sample-service/FAILURE_LAB.md
 docs/00-project/project-scope.md
 docs/00-project/roadmap.md
 docs/00-project/workload-strategy.md
@@ -82,23 +84,45 @@ Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
 ```
 
-## Current unfinished part
+## Current service implementation state
 
-The infrastructure and evidence baseline are meaningful, but the operated service is not yet strong enough for final portfolio positioning.
+The service implementation baseline is now completed in repository code:
 
-The service must be completed enough to answer this interview question without defensive wording:
+```text
+Phase 5A. work-order domain/schema: implemented
+Phase 5B. server-rendered work-order web workflow: implemented
+Phase 5C. evidence upload/download workflow: implemented
+Phase 5D. WEB/WAS failure-lab endpoints: implemented
+```
+
+Implemented service capabilities:
+
+```text
+work-order list/detail/create/status-change pages
+status history and operation audit logs
+evidence upload/download workflow
+PostgreSQL metadata + file storage object consistency path
+failure-lab: sleep, db-sleep, file-storage-check, upload-limits
+```
+
+The service can now answer this interview question without defensive wording:
 
 ```text
 What service did you operate?
 ```
 
-Target answer after implementation:
+Target answer:
 
 ```text
 운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스를 운영 대상으로 구성했습니다. 사용자는 작업 요청을 등록하고, 운영자는 상태를 변경하며, 조치 메모와 증빙 파일을 남길 수 있습니다. PostgreSQL에는 작업 요청과 파일 메타데이터를 저장하고, NFS에는 실제 첨부파일을 저장하도록 분리했습니다.
 ```
 
-Do not use this answer as a completed claim until the web workflow and evidence are implemented and validated.
+Important boundary:
+
+```text
+The enhanced service implementation baseline is complete.
+Enhanced AWS runtime evidence is not yet refreshed.
+```
 
 ## Phase 4 freeze remains valid
 
@@ -117,11 +141,11 @@ Kubernetes/EKS/GitOps
 new AWS runtime windows by default
 ```
 
-The next work should focus on service completion, not observability expansion.
+The next work should focus on enhanced-service validation, not observability expansion.
 
 ## Validated claims
 
-The repository can currently support these claims:
+The repository can currently support these runtime evidence claims:
 
 ```text
 EC2-based WEB/WAS/DB/Storage/Backup/Observability tiers were separated and configured.
@@ -133,16 +157,22 @@ Prometheus metrics distinguished DB host reachability from PostgreSQL service fa
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
 ```
 
-## Claims not yet supported
+The repository can currently support these implementation claims:
+
+```text
+ops-sample-service includes a lightweight web workflow for operations work orders and evidence files.
+The service includes work-order pages, status history, audit logs, evidence upload/download, and failure-lab endpoints.
+```
+
+## Claims not yet supported by refreshed runtime evidence
 
 Do not claim yet:
 
 ```text
-ops-sample-service is a completed web business service.
-The project includes a completed work-order web workflow.
-The project validates status changes and action history through web pages.
-The project validates full evidence upload/download workflow through the enhanced web service.
-The project validates WEB/WAS timeout, thread, connection-pool, or slow-query behavior through service-level scenarios.
+The enhanced web workflow has been runtime-validated through AWS/Nginx/WAS.
+The evidence upload/download workflow has been runtime-validated through Nginx/WAS/NFS/PostgreSQL.
+The failure-lab sleep/db-sleep scenarios have been validated with logs and metrics.
+The restore-lab recovery has been refreshed against the enhanced service model.
 ```
 
 ## Not supported claims
@@ -160,6 +190,7 @@ automatic failover
 SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
+commercial ITSM implementation
 ```
 
 ## Runtime policy
@@ -169,12 +200,12 @@ Do not repeatedly create and destroy AWS resources.
 Current default:
 
 ```text
-No new AWS runtime.
+No new AWS runtime by default.
 No more observability feature expansion.
 No more Prometheus/Grafana/Alertmanager expansion.
 ```
 
-For service implementation PRs, use static and local checks first. Open a new AWS runtime only after the service enhancement is ready for one planned validation window:
+For enhanced service validation, use static and local checks first. Open a new AWS runtime only after validation prep is ready for one planned validation window:
 
 ```text
 prepare statically -> apply once -> configure -> validate -> collect evidence -> destroy once
@@ -182,19 +213,16 @@ prepare statically -> apply once -> configure -> validate -> collect evidence ->
 
 ## Recommended next tasks
 
-Use implementation tasks by default, not more portfolio packaging:
+Use validation prep tasks by default, not more app feature expansion:
 
 ```text
-[APP] Add work order domain and schema
-[APP] Add basic server-rendered web UI
-[APP] Add evidence upload/download workflow
-[APP] Add status transition and event history
-[APP] Add operations dashboard and failure lab
-[ANSIBLE] Add validation for enhanced service workflow
+[ANSIBLE] Add enhanced service workflow validation
+[VALIDATION] Document enhanced web workflow evidence
 [VALIDATION] Refresh restore-lab evidence after service completion
+[DOCS] Update evidence index after enhanced-service validation
 ```
 
-Avoid new runtime tasks until the service implementation is ready for validation.
+Avoid new runtime tasks until the validation playbooks are ready.
 
 ## Prompt to start the next chat
 
@@ -204,6 +232,8 @@ We are continuing the GitHub project `siamese-lang/multitier-ops-platform`.
 Before doing any work, read these repository documents and treat them as the source of truth:
 
 - README.md
+- apps/ops-sample-service/README.md
+- apps/ops-sample-service/FAILURE_LAB.md
 - docs/00-project/project-scope.md
 - docs/00-project/roadmap.md
 - docs/00-project/workload-strategy.md
@@ -219,7 +249,7 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 
 This is not an OpenKoda installation project, not a Terraform showcase, not a Spring Boot sample app project, not Kubernetes/EKS/GitOps work, not a Grafana dashboard-first project, and not a Prometheus-only monitoring practice. It is a VM-based operations portfolio focused on WEB/WAS/DB/Storage/Backup/Observability tier separation, failure diagnosis, and recovery validation.
 
-Current completed evidence state:
+Current completed runtime evidence state:
 - Phase 0 lab-runtime smoke test completed.
 - Phase 1 lab-full-min WEB/WAS/DB completed.
 - Phase 2A lab-full-ops storage validation completed.
@@ -230,7 +260,11 @@ Current completed evidence state:
 - Phase 4C metric-based DB service incident diagnosis completed.
 - Phase 4D Prometheus DB service alert-rule evaluation evidence completed.
 
+Current service implementation state:
+- `ops-sample-service` is now implemented as a lightweight web service for operations work orders and evidence files.
+- It includes work-order list/detail/create/status-change pages, status history, audit logs, evidence upload/download, DB/file consistency paths, and WEB/WAS failure-lab endpoints.
+
 Phase 4 observability expansion is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default.
 
-Current priority is service completion: make `ops-sample-service` explainable as a lightweight web service for operations work orders and evidence files. Start from `docs/00-project/ops-sample-service-completion-scope.md`. Next work should implement the service domain/schema, then web UI, then upload/download, status history, operations dashboard, and validation.
+Current priority is enhanced-service validation: prepare Ansible validation for the web workflow, upload/download, request ID log trace, failure-lab slow request and DB sleep paths, then run one planned AWS runtime validation window, collect evidence, refresh evidence docs, and destroy once.
 ```
