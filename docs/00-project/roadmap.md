@@ -16,7 +16,7 @@ Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
 Phase 2A. lab-full-ops storage validation: completed
 Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
 Phase 3. restore-lab DB/file/API recovery validation: completed
-Phase 4. observability baseline: next recommended milestone
+Phase 4. observability baseline: design and Ansible baseline prepared; runtime validation pending
 Phase 5. advanced incident reports and failover: optional after core observability
 ```
 
@@ -26,6 +26,7 @@ Important boundary:
 Backup artifact creation and restore validation were proven separately.
 The project may now claim restore-lab DB/file/API recovery validation success,
 but should not overclaim production-grade HA, automated failover, or managed backup coverage.
+Phase 4 observability runtime validation has not yet been executed.
 ```
 
 ## Phase 0. lab-runtime smoke test — completed
@@ -302,7 +303,7 @@ Backup artifact creation had already been validated separately in Phase 2B.
 Restore was validated separately in restore-lab on 2026-07-12.
 ```
 
-## Phase 4. Observability baseline — next recommended milestone
+## Phase 4. Observability baseline — design and Ansible baseline prepared; runtime validation pending
 
 Purpose:
 
@@ -311,28 +312,71 @@ Collect logs and metrics that support incident diagnosis.
 The goal is not a pretty dashboard; the goal is evidence for operating decisions.
 ```
 
-Recommended scope:
+Prepared documents and implementation baseline:
 
 ```text
-node metrics for nginx-01, app-01, db-primary-01, nfs-01, backup-01
+docs/01-architecture/observability-evidence-baseline.md
+docs/03-runbooks/observability-baseline.md
+docs/03-runbooks/observability-evidence-collection-baseline.md
+infra/ansible/playbooks/observability-baseline.yml
+```
+
+Prepared evidence scope:
+
+```text
+node health/resource state for nginx-01, app-01, db-primary-01, nfs-01, backup-01
 Nginx access/error log visibility
-ops-sample-service journald/request-id log visibility
+ops-sample-service journald visibility
 PostgreSQL service/log visibility
-NFS/storage host metrics
-one incident report that uses logs or metrics to narrow the failure class
+NFS export/filesystem visibility
+backup/restore artifact and job-log visibility
+request-path probe TSV/report
+optional DB service unavailable incident report
+```
+
+Optional incident guardrail:
+
+```text
+observability_run_db_service_incident=false by default
+```
+
+This default prevents accidental PostgreSQL service stops during ordinary baseline collection.
+
+Runtime validation is still pending. A future validation window should use the existing policy:
+
+```text
+apply once -> configure baseline -> collect observability evidence
+-> run optional DB service incident -> recover -> collect evidence -> destroy once
+```
+
+A future Phase 4 runtime evidence PR may claim only the narrow result:
+
+```text
+Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
+```
+
+It must not claim:
+
+```text
+production monitoring maturity
+complete Prometheus/Loki/Grafana platform coverage
+Alertmanager maturity
+HA or automated failover
+SLO/SLA compliance
 ```
 
 Recommended next task:
 
 ```text
-[DESIGN] Define observability evidence baseline for EC2 WEB/WAS/DB/Storage/Backup operations
+[VALIDATION] Run and document observability baseline evidence
 ```
 
 Important boundary:
 
 ```text
 Do not start with Grafana dashboard polish.
-Start with evidence-producing metrics/logs that help diagnose failures.
+Do not expand Prometheus/Loki before basic logs and metrics are used in an incident report.
+Do not turn Phase 4 into a CloudWatch-managed architecture or dashboard gallery.
 ```
 
 ## Phase 5. Advanced operations — optional after core observability
