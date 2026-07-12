@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Work Order Detail - ops-sample-service</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2933; }
+    a { color: #165dba; text-decoration: none; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; }
+    th, td { border-bottom: 1px solid #d9e2ec; padding: 0.65rem; text-align: left; vertical-align: top; }
+    th { background: #f0f4f8; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 1rem; align-items: start; }
+    .card { border: 1px solid #d9e2ec; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; background: #ffffff; }
+    .muted { color: #64748b; font-size: 0.9rem; }
+    .notice { padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; }
+    .error { background: #fff1f2; border: 1px solid #fecdd3; color: #9f1239; }
+    .success { background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534; }
+    label { display: block; font-weight: 600; margin-top: 0.8rem; }
+    select, input, textarea, button { box-sizing: border-box; width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    textarea { min-height: 5rem; }
+    button { border: 0; border-radius: 0.375rem; background: #165dba; color: #fff; cursor: pointer; }
+    .pill { display: inline-block; border: 1px solid #bcccdc; border-radius: 999px; padding: 0.25rem 0.55rem; background: #f8fafc; margin-right: 0.25rem; }
+  </style>
+</head>
+<body>
+<p><a href="/work-orders">← 작업 요청 목록</a></p>
+
+<div class="notice success" th:if="${success}" th:text="${success}">success</div>
+<div class="notice error" th:if="${error}" th:text="${error}">error</div>
+
+<header>
+  <h1 th:text="${workOrder.title}">Work order title</h1>
+  <p class="muted">작업 요청 상세, 상태 변경, 이력, 증빙 파일 메타데이터를 확인합니다.</p>
+</header>
+
+<div class="grid">
+  <main>
+    <section class="card">
+      <h2>기본 정보</h2>
+      <p>
+        <span class="pill">ID <strong th:text="${workOrder.id}">1</strong></span>
+        <span class="pill">상태 <strong th:text="${workOrder.status}">OPEN</strong></span>
+        <span class="pill">우선순위 <strong th:text="${workOrder.priority}">HIGH</strong></span>
+      </p>
+      <table>
+        <tbody>
+        <tr><th>요청자</th><td th:text="${workOrder.requester}">service-desk</td></tr>
+        <tr><th>담당자</th><td th:text="${workOrder.assignee}">ops-admin</td></tr>
+        <tr><th>생성 시각</th><td th:text="${workOrder.createdAt}">created</td></tr>
+        <tr><th>수정 시각</th><td th:text="${workOrder.updatedAt}">updated</td></tr>
+        <tr><th>설명</th><td th:text="${workOrder.description}">description</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>상태 이력</h2>
+      <table>
+        <thead>
+        <tr>
+          <th>ID</th>
+          <th>Event</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Actor</th>
+          <th>Message</th>
+          <th>Created</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="event : ${events}">
+          <td th:text="${event.id}">1</td>
+          <td th:text="${event.eventType}">STATUS_CHANGED</td>
+          <td th:text="${event.fromStatus}">OPEN</td>
+          <td th:text="${event.toStatus}">DONE</td>
+          <td th:text="${event.actor}">ops-admin</td>
+          <td th:text="${event.message}">message</td>
+          <td th:text="${event.createdAt}">created</td>
+        </tr>
+        <tr th:if="${events == null or events.isEmpty()}">
+          <td colspan="7" class="muted">상태 이력이 없습니다.</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>증빙 파일 메타데이터</h2>
+      <p class="muted">일반 업로드 UI는 다음 단계입니다. 현재는 API로 생성된 증빙 파일의 DB metadata와 NFS object를 확인합니다.</p>
+      <table>
+        <thead>
+        <tr>
+          <th>ID</th>
+          <th>File</th>
+          <th>Storage path</th>
+          <th>Size</th>
+          <th>SHA-256</th>
+          <th>Consistency</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="file : ${evidenceFiles}">
+          <td th:text="${file.id}">1</td>
+          <td th:text="${file.fileName}">file</td>
+          <td th:text="${file.storagePath}">path</td>
+          <td th:text="${file.sizeBytes}">0</td>
+          <td class="muted" th:text="${file.sha256}">hash</td>
+          <td><a th:href="@{/api/work-orders/{workOrderId}/evidence-files/{evidenceId}/consistency(workOrderId=${workOrder.id},evidenceId=${file.id})}">API 확인</a></td>
+        </tr>
+        <tr th:if="${evidenceFiles == null or evidenceFiles.isEmpty()}">
+          <td colspan="6" class="muted">등록된 증빙 파일 메타데이터가 없습니다.</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <aside>
+    <section class="card">
+      <h2>상태 변경</h2>
+      <form th:action="@{/work-orders/{id}/status(id=${workOrder.id})}" method="post">
+        <label for="status">상태</label>
+        <select id="status" name="status">
+          <option th:each="status : ${statusOptions}" th:value="${status}" th:text="${status}" th:selected="${status == workOrder.status}">OPEN</option>
+        </select>
+
+        <label for="actor">처리자</label>
+        <input id="actor" name="actor" value="ops-admin">
+
+        <label for="message">조치 메모</label>
+        <textarea id="message" name="message" placeholder="예: Nginx upstream timeout 확인 후 WAS 상태 점검을 시작했습니다."></textarea>
+
+        <button type="submit">상태 변경</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>운영 확인 링크</h2>
+      <ul>
+        <li><a th:href="@{/api/work-orders/{id}(id=${workOrder.id})}">Work order JSON</a></li>
+        <li><a th:href="@{/api/work-orders/{id}/events(id=${workOrder.id})}">Events JSON</a></li>
+        <li><a href="/api/audit-logs?limit=10">Audit logs JSON</a></li>
+        <li><a href="/readyz">Readiness</a></li>
+        <li><a href="/node">Node identity</a></li>
+      </ul>
+    </section>
+  </aside>
+</div>
+
+<footer class="muted">
+  node: <span th:text="${node.hostname}">hostname</span> / env: <span th:text="${node.environment}">env</span> / version: <span th:text="${node.version}">version</span>
+</footer>
+</body>
+</html>
