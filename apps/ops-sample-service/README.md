@@ -28,6 +28,7 @@ It provides deterministic evidence for:
 - app node identity
 - HTTP request logging with request IDs
 - DB-backed work-order state
+- web-based work-order list/detail/create/status-change workflow
 - work-order event history
 - operation audit logs
 - DB metadata plus NFS file-object consistency checks in `lab-full-ops`
@@ -116,6 +117,8 @@ GET  /healthz                                             -> 200
 GET  /node                                                -> 200
 GET  /readyz                                              -> 503 when DB env is missing
 GET  /db/time                                             -> 503 when DB env is missing
+GET  /work-orders/new                                     -> 200, renders create form without DB
+GET  /work-orders                                         -> renders DB-unavailable web page when DB env is missing
 GET  /api/work-orders                                     -> 503 when DB env is missing
 GET  /api/work-orders/summary                             -> 503 when DB env is missing
 GET  /api/work-orders/{id}/events                         -> 503 when DB env is missing
@@ -142,7 +145,29 @@ java -jar target/ops-sample-service-0.1.0.jar
 
 The app does not create or mount NFS. It only uses the file path provided by the operating environment. In `lab-full-ops`, that path should match the app-side NFS mount configured by Ansible.
 
-## Endpoints
+## Web workflow pages
+
+The service includes a small server-rendered HTML workflow so that it can be explained as a lightweight web service, not only as a JSON API workload.
+
+| Path | Purpose |
+|---|---|
+| `GET /` | Redirects to `/work-orders` |
+| `GET /work-orders` | Lists work orders, status summary, and recent audit logs |
+| `GET /work-orders/new` | Renders the create-work-order form |
+| `POST /work-orders` | Creates a work order from the web form |
+| `GET /work-orders/{id}` | Shows work-order detail, status history, evidence metadata, and operational links |
+| `POST /work-orders/{id}/status` | Updates work-order status and records event/audit rows |
+
+Web workflow examples:
+
+```bash
+curl -i http://localhost:8080/work-orders
+curl -i http://localhost:8080/work-orders/new
+```
+
+The web pages are intentionally simple. They exist to make the operated service explainable and to exercise WEB/WAS request paths through Nginx, not to become a full front-end project.
+
+## JSON API endpoints
 
 ### `GET /healthz`
 
@@ -307,7 +332,7 @@ This endpoint is intended for storage failure, backup, and restore validation.
 
 ## Response evidence
 
-Every response includes node identity so the operator can prove which app node handled the request.
+Every JSON response includes node identity so the operator can prove which app node handled the request.
 
 Example fields:
 
@@ -346,6 +371,20 @@ curl -i -H 'X-Request-Id: incident-app-01-001' http://<nginx-public-ip>/api/work
 ```
 
 ## Operational evidence examples
+
+### Web workflow evidence
+
+```bash
+curl -i http://<nginx-public-ip>/work-orders
+curl -i http://<nginx-public-ip>/work-orders/new
+```
+
+Expected evidence:
+
+- Nginx can route browser-style HTML requests to the WAS tier.
+- the list page depends on PostgreSQL-backed work-order data.
+- DB unavailability changes the web workflow from normal list rendering to an operator-visible error page.
+- request logs still capture method, path, status, duration, node identity, and request ID.
 
 ### Work-order lifecycle evidence
 
@@ -435,6 +474,7 @@ Expected evidence:
 # stop PostgreSQL later with Ansible/systemd
 curl -i http://<nginx-public-ip>/healthz
 curl -i http://<nginx-public-ip>/readyz
+curl -i http://<nginx-public-ip>/work-orders
 curl -i http://<nginx-public-ip>/api/work-orders
 ```
 
@@ -443,6 +483,7 @@ Expected evidence:
 - `/healthz` can still return `200`
 - `/readyz` returns `503`
 - DB-backed API returns `503`
+- DB-backed web workflow renders an operator-visible error page
 - app request logs show DB-backed endpoints failing while process health remains up
 - after PostgreSQL recovery, readiness and data APIs return to normal
 
@@ -464,7 +505,6 @@ Expected evidence:
 
 This app still does not include:
 
-- full UI workflow
 - authentication
 - complex RBAC
 - OpenKoda customization
