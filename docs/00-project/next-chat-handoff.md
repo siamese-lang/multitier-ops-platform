@@ -63,6 +63,7 @@ docs/00-project/project-scope.md
 docs/00-project/roadmap.md
 docs/00-project/workload-strategy.md
 docs/00-project/ops-sample-service-completion-scope.md
+docs/00-project/enhanced-service-operations-scenarios.md
 docs/00-project/portfolio-summary.md
 docs/00-project/interview-explanation-notes.md
 docs/00-project/next-chat-handoff.md
@@ -86,7 +87,7 @@ Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
 ```
 
-## Current service implementation state
+## Current service implementation and validation-prep state
 
 The service implementation baseline is complete in repository code:
 
@@ -96,6 +97,7 @@ Phase 5B. server-rendered work-order web workflow: implemented
 Phase 5C. evidence upload/download workflow: implemented
 Phase 5D. WEB/WAS failure-lab endpoints: implemented
 Phase 5E. enhanced service workflow validation playbook: statically prepared
+Phase 5F. enhanced service operations scenario matrix: defined
 ```
 
 Implemented service capabilities:
@@ -108,11 +110,12 @@ PostgreSQL metadata + file storage object consistency path
 failure-lab: sleep, db-sleep, file-storage-check, upload-limits
 ```
 
-Validation prep added:
+Validation prep and scenario planning added:
 
 ```text
 infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
 docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
+docs/00-project/enhanced-service-operations-scenarios.md
 ```
 
 The service can now answer this interview question without defensive wording:
@@ -130,7 +133,7 @@ Target answer:
 Important boundary:
 
 ```text
-The enhanced service implementation and validation playbook baseline are complete.
+The enhanced service implementation, scenario matrix, and baseline validation playbook are complete.
 Enhanced AWS runtime evidence is not yet refreshed.
 ```
 
@@ -151,7 +154,7 @@ Kubernetes/EKS/GitOps
 new AWS runtime windows by default
 ```
 
-The next work should focus on one planned enhanced-service runtime validation window, not more app features or observability expansion.
+The next work should focus on incident-specific validation prep and one planned enhanced-service runtime validation window, not more app features or observability expansion.
 
 ## Validated claims
 
@@ -173,6 +176,7 @@ The repository can currently support these implementation and prep claims:
 ops-sample-service includes a lightweight web workflow for operations work orders and evidence files.
 The service includes work-order pages, status history, audit logs, evidence upload/download, and failure-lab endpoints.
 The enhanced service workflow validation playbook is prepared, but not yet runtime-validated.
+The enhanced service operations scenario matrix is defined, but incident-specific runtime evidence is not yet collected.
 ```
 
 ## Claims not yet supported by refreshed runtime evidence
@@ -182,7 +186,9 @@ Do not claim yet:
 ```text
 The enhanced web workflow has been runtime-validated through AWS/Nginx/WAS.
 The evidence upload/download workflow has been runtime-validated through Nginx/WAS/NFS/PostgreSQL.
+Upload failure isolation has been validated across Nginx/WAS/NFS/PostgreSQL.
 The failure-lab sleep/db-sleep scenarios have been validated with logs and metrics.
+The DB service incident has been validated against the enhanced web workflow.
 The restore-lab recovery has been refreshed against the enhanced service model.
 ```
 
@@ -224,13 +230,20 @@ prepare statically -> apply once -> configure -> validate -> collect evidence ->
 
 ## Recommended next tasks
 
-Use runtime planning and validation documentation tasks by default:
+Use scenario-specific validation prep tasks by default:
 
 ```text
-[VALIDATION] Run enhanced service workflow validation in one planned runtime window
-[VALIDATION] Document enhanced web workflow evidence
-[VALIDATION] Refresh restore-lab evidence after service completion
-[DOCS] Update evidence index after enhanced-service validation
+[ANSIBLE] Add upload failure and upload-limit scenario validation
+[ANSIBLE] Add WAS sleep vs DB sleep latency scenario validation
+[ANSIBLE] Add DB incident web-impact validation
+[ANSIBLE] Prepare enhanced restore-lab validation refresh
+[VALIDATION] Run one planned enhanced-service AWS validation window
+```
+
+The scenario matrix is the planning source of truth:
+
+```text
+docs/00-project/enhanced-service-operations-scenarios.md
 ```
 
 Avoid app feature expansion unless validation exposes a concrete defect.
@@ -249,6 +262,7 @@ Before doing any work, read these repository documents and treat them as the sou
 - docs/00-project/roadmap.md
 - docs/00-project/workload-strategy.md
 - docs/00-project/ops-sample-service-completion-scope.md
+- docs/00-project/enhanced-service-operations-scenarios.md
 - docs/00-project/portfolio-summary.md
 - docs/00-project/interview-explanation-notes.md
 - docs/00-project/next-chat-handoff.md
@@ -272,12 +286,13 @@ Current completed runtime evidence state:
 - Phase 4C metric-based DB service incident diagnosis completed.
 - Phase 4D Prometheus DB service alert-rule evaluation evidence completed.
 
-Current service implementation state:
+Current service implementation and validation-prep state:
 - `ops-sample-service` is now implemented as a lightweight web service for operations work orders and evidence files.
 - It includes work-order list/detail/create/status-change pages, status history, audit logs, evidence upload/download, DB/file consistency paths, and WEB/WAS failure-lab endpoints.
 - Enhanced workflow validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml`.
+- Enhanced service operations scenarios are defined in `docs/00-project/enhanced-service-operations-scenarios.md`.
 
 Phase 4 observability expansion is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default.
 
-Current priority is one planned enhanced-service runtime validation window: apply once, configure DB/NFS/app/Nginx, run `lab-full-ops-enhanced-service-workflow-validation.yml`, collect evidence, document enhanced web workflow evidence, and destroy once.
+Current priority is incident-specific validation prep before AWS runtime: add validation playbooks for upload failure isolation, WAS sleep vs DB sleep latency comparison, DB incident web impact, and enhanced restore-lab refresh. After that, run one planned AWS validation window, collect evidence, document results, and destroy once.
 ```
