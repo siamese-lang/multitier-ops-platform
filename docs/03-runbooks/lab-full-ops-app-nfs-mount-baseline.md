@@ -19,7 +19,7 @@ This baseline configures only the app-side NFS client mount:
 ```text
 app-01
 - install NFS client package
-- create app-side mount directory
+- create app-side mount directory when not already mounted
 - persist the NFS mount in /etc/fstab
 - mount the nfs-01 export
 - verify mount state
@@ -73,11 +73,27 @@ That means `app-01` cannot install `nfs-common` from public repositories unless 
 
 If package installation fails, treat it as a package-access problem first, not as an NFS mount design failure.
 
+## NFS ownership and `root_squash` rule
+
+The `nfs-01` export keeps `root_squash` enabled. This is intentional because the lab should not rely on unrestricted root writes over NFS.
+
+During the 2026-07-12 storage validation window, the first app-side mount attempt succeeded but the write probe failed because the server-side export root was still owned by `root:root` with mode `0775`. With `root_squash`, a root write from the client is mapped to the anonymous NFS identity, so the mounted path was not writable even though the mount itself was healthy.
+
+The corrected server-side export root is:
+
+```text
+/srv/ops-sample/files -> nobody:nogroup 0777
+```
+
+The app-side playbook must not attempt to `chown` the mounted NFS root after it is already mounted. Ownership and mode of the mounted path are controlled on `nfs-01`, not from `app-01`.
+
 ## Files
 
 ```text
 infra/ansible/inventories/lab-full-ops/group_vars/app.yml
+infra/ansible/inventories/lab-full-ops/group_vars/storage.yml
 infra/ansible/playbooks/lab-full-ops-app-nfs-mount-baseline.yml
+infra/ansible/playbooks/lab-full-ops-nfs-storage-baseline.yml
 ```
 
 ## Configuration defaults
@@ -159,12 +175,20 @@ cat /mnt/ops-sample/files/.ansible-nfs-write-probe-app-01
 cat /etc/fstab | grep /mnt/ops-sample/files
 ```
 
+Collect the following from `nfs-01`:
+
+```bash
+ls -ld /srv/ops-sample/files
+exportfs -v
+```
+
 Minimum evidence should show:
 
 - app node can resolve and mount the `nfs-01` export
 - `/mnt/ops-sample/files` is an NFS mount
 - the persisted fstab entry exists
 - app node can write a probe file to the mounted path
+- server-side export root ownership and mode are compatible with `root_squash`
 - the file path aligns with the later app file-operation harness
 
 ## Failure interpretation
@@ -177,6 +201,7 @@ network failure      -> security group, route, subnet, or NFS port 2049
 server failure       -> nfs-01 export not active or wrong export CIDR
 client failure       -> wrong mount source, fstab line, mount path, or package missing
 permission failure   -> export option or directory permission mismatch
+idempotency failure  -> playbook tries to chown an already-mounted NFS root
 ```
 
 Do not repeatedly destroy and recreate Terraform resources until the failure class is identified.
