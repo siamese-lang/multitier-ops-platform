@@ -8,6 +8,8 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 
 This project remains a VM-based WEB/WAS/DB operations portfolio. It is not an OpenKoda project, Terraform showcase, Kubernetes project, or Spring Boot feature-development project.
 
+The operating target is still `ops-sample-service`, but the service is not frozen. It may be extended when a service behavior is required to reproduce realistic WEB/WAS/DB/Storage operating scenarios. Application changes must remain subordinate to operations validation and evidence collection.
+
 ## Runtime validation status
 
 Completed validation scope:
@@ -23,6 +25,8 @@ Restore-lab HTTP/API consistency validation: completed
 Source lab destroy: completed
 Restore lab destroy: completed
 ```
+
+These completed validations are preserved as existing runtime evidence. They do not mean the project should be closed immediately, and they do not make the next phase documentation-only.
 
 ## Validated recovery proof
 
@@ -70,13 +74,52 @@ Not supported:
 - Managed database recovery
 ```
 
-## Next documentation work
+## Current operating direction
 
-Next steps are documentation-only unless a concrete runtime defect is found:
+The next phase is service-linked operating scenario hardening, not documentation-only cleanup.
+
+Current direction:
 
 ```text
-1. Update README status.
-2. Update roadmap Phase 5E status.
-3. Update next-chat handoff.
-4. Prepare portfolio-facing project summary.
+1. Keep AWS EC2 as the runtime environment.
+2. Do not introduce OCI for v1.0.
+3. Keep ops-sample-service as the operated workload, but extend it when required by a concrete operating scenario.
+4. Prefer scenarios where service behavior exposes WEB/WAS/DB/Storage operating problems.
+5. Introduce new open-source tools only when they support diagnosis, comparison, or recovery evidence for a concrete scenario.
+6. Update documentation after runtime scope changes, but avoid making documentation work the project center before v1.0 scope is closed.
+```
+
+## Next work before v1.0 closure
+
+Next work is limited to the scenario-hardening path below:
+
+```text
+M1. Reframe roadmap/current-state language so the project is not read as documentation-only or tool-freeze work.
+M2. Extend ops-sample-service as an operations workload where needed.
+M3. Implement and validate a WAS thread pool / HikariCP / PostgreSQL connection pressure scenario.
+M4. Runtime-validate release metadata and deployment rollback behavior against real service smoke checks.
+M5. Finalize README, evidence index, incident reports, and interview Q&A after runtime evidence is complete.
+```
+
+## Guardrails
+
+Allowed:
+
+```text
+- Service changes that make WEB/WAS/DB/Storage operating scenarios more realistic
+- HikariCP, request handling, DB hold, query pressure, release metadata, and rollback behavior when tied to evidence
+- Additional observability/exporter/logging tools when they are required by a concrete incident diagnosis path
+```
+
+Not allowed for v1.0:
+
+```text
+- OCI migration or dual-cloud rewrite
+- OpenKoda adoption as the main workload
+- Kubernetes/EKS/GitOps migration
+- AWS managed architecture redesign around ALB/RDS
+- Dashboard-first Grafana work
+- Tool-first Loki/Alertmanager expansion
+- Application feature development that is not tied to an operating scenario
+- Documentation-only closure before the remaining service-linked runtime scenarios are evaluated
 ```
