@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap separates completed runtime validation, completed service implementation baseline, and remaining enhanced-service validation work.
+This roadmap separates completed runtime validation, current portfolio-hardening work, and optional future validation.
 
 The fixed project theme is:
 
@@ -30,7 +30,8 @@ Phase 5A. ops-sample-service domain/schema: implemented
 Phase 5B. server-rendered work-order web workflow: implemented
 Phase 5C. evidence upload/download workflow: implemented
 Phase 5D. WEB/WAS failure-lab endpoints: implemented
-Phase 5E. enhanced-service validation and evidence refresh: current focus
+Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
+Phase 6. portfolio hardening and interview readiness: current focus
 ```
 
 ## Phase 4 freeze decision
@@ -50,7 +51,7 @@ AWS managed architecture replacement
 SLO/SLA compliance work
 ```
 
-The next work should be enhanced-service validation, not another observability feature.
+Observability remains supporting evidence for diagnosis. It is not the project theme.
 
 ## Completed operating evidence
 
@@ -131,7 +132,7 @@ Important boundary:
 
 ```text
 Phase 2B proves backup artifact creation only.
-The recovery claim comes from Phase 3 restore-lab validation.
+The recovery claim comes from restore-lab validation.
 ```
 
 Key evidence:
@@ -158,13 +159,14 @@ Supported claim:
 ```text
 Restore-lab DB/file/API recovery validation succeeded.
 Backup artifact creation had already been validated separately in Phase 2B.
-Restore was validated separately in restore-lab on 2026-07-12.
+Restore was validated separately in restore-lab.
 ```
 
 Key evidence:
 
 ```text
 docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
+docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
 ```
 
 ### Phase 4A. logs, service state, and request-path observability evidence
@@ -182,54 +184,13 @@ request-path probe TSV/report
 controlled DB service unavailable incident report
 ```
 
-Supported claim:
-
-```text
-Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
-```
-
 Key evidence:
 
 ```text
 docs/04-evidence/observability-baseline-validation-2026-07-12.md
 ```
 
-### Phase 4B. node_exporter and Prometheus scrape metrics evidence
-
-Validated monitoring-enabled topology:
-
-```text
-[Public Subnet]
-- bastion-01
-- nginx-01
-
-[Private App Subnet]
-- app-01
-
-[Private DB Subnet]
-- db-primary-01
-
-[Private Storage Subnet]
-- nfs-01
-
-[Private Ops Subnet]
-- backup-01
-- mon-01
-```
-
-Supported claim:
-
-```text
-Prometheus scrape evidence validated host-level node_exporter targets for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
-```
-
-Key evidence:
-
-```text
-docs/04-evidence/observability-metrics-validation-2026-07-12.md
-```
-
-### Phase 4C. metric-based DB service incident diagnosis
+### Phase 4B/4C. Prometheus metrics validation and DB service incident diagnosis
 
 Diagnostic distinction:
 
@@ -244,12 +205,6 @@ PostgreSQL service inactive and port 5432 closed
   -> DB service unavailable, not DB host unavailable
 ```
 
-Supported claim:
-
-```text
-Prometheus metrics helped distinguish DB host reachability from DB service dependency failure.
-```
-
 Key evidence:
 
 ```text
@@ -257,14 +212,6 @@ docs/04-evidence/observability-metrics-validation-2026-07-12.md
 ```
 
 ### Phase 4D. Prometheus DB service alert-rule evaluation
-
-Validated rule condition:
-
-```text
-DB host is reachable from Prometheus.
-PostgreSQL service is inactive on db-primary-01.
-Prometheus ALERTS query returns firing result.
-```
 
 Supported claim:
 
@@ -285,73 +232,100 @@ Key evidence:
 docs/04-evidence/observability-alert-validation-2026-07-12.md
 ```
 
-## Completed service implementation baseline
+## Completed enhanced-service runtime validation
 
-`ops-sample-service` is now implemented as:
+The enhanced service implementation was validated as a first enhanced runtime pass.
 
-```text
-운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스
-```
-
-Implemented service capabilities:
+Completed validation scope:
 
 ```text
-work-order domain/schema
-server-rendered web UI
-work-order list/detail/create/status-change workflow
-status history and operation audit logs
-evidence upload/download workflow
-PostgreSQL metadata + file storage object consistency path
-WEB/WAS failure-lab page and APIs
+S1 enhanced service workflow validation: completed
+S2 upload-limit incident validation: completed
+S3 latency scenario validation: completed
+S4 DB web-impact incident validation: completed
+Backup baseline: completed
+Restore-lab DB/file restore baseline: completed
+Restore-lab HTTP/API consistency validation: completed
+Source lab destroy: completed
+Restore lab destroy: completed
 ```
 
-Relevant app docs:
+Current-state document:
 
 ```text
-apps/ops-sample-service/README.md
-apps/ops-sample-service/FAILURE_LAB.md
-docs/00-project/ops-sample-service-completion-scope.md
+docs/00-project/current-state-after-enhanced-runtime-validation.md
 ```
 
-## Current focus: Phase 5E enhanced-service validation
+Restore-lab recovery evidence:
 
-The next work should not create AWS resources by default.
+```text
+docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
+```
+
+Supported enhanced-service claims:
+
+```text
+enhanced web workflow was validated through AWS/Nginx/WAS
+work-order create/status-change/evidence-file workflow was validated
+upload-limit behavior was validated as an operating scenario
+WAS sleep vs DB sleep latency behavior was validated as an operating scenario
+DB web-impact behavior was validated against the enhanced service model
+restore-lab recovery was refreshed against the enhanced service model
+```
+
+## Current focus: Phase 6 portfolio hardening
+
+The project is not finished just because the first enhanced runtime validation completed.
 
 Current focus:
 
 ```text
-Ansible validation prep for enhanced web workflow
-static syntax and playbook checks
-one planned runtime validation window only when ready
-collect enhanced-service evidence
-destroy once
-refresh evidence docs
+1. Make README and evidence-index reflect validated claims accurately.
+2. Convert raw validation evidence into interview-ready incident reports.
+3. Strengthen portfolio-summary and interview-explanation notes.
+4. Keep claim boundaries strict.
+5. Avoid unnecessary AWS runtime creation.
 ```
 
 Recommended next PR categories:
 
 ```text
-[ANSIBLE] Add enhanced service workflow validation
-[VALIDATION] Document enhanced web workflow evidence
-[VALIDATION] Refresh backup/restore evidence after service completion
-[DOCS] Update evidence index after enhanced-service validation
+[DOCS] Add incident reports for enhanced operating scenarios
+[DOCS] Harden evidence index claim mapping
+[DOCS] Improve interview explanation notes
+[VALIDATION] Add VM/systemd deployment rollback scenario only if justified
 ```
 
-## Runtime policy
+## Optional future runtime validation
 
-Do not run Terraform apply/destroy for every small PR.
+Do not open AWS runtime by default.
+
+If one more validation window is justified, prioritize:
 
 ```text
-Documentation cleanup -> no AWS runtime
-Application implementation -> local/static checks first
-Ansible syntax or static prep -> no AWS runtime unless a scenario needs evidence
-Enhanced service validation -> one planned runtime window only
-Runtime window -> collect evidence -> destroy once
+VM/systemd app deployment and rollback scenario
+```
+
+Reason:
+
+```text
+The current project already has strong failure, latency, DB-impact, backup, and restore evidence.
+A deployment/rollback scenario would strengthen WEB/WAS operations interview readiness without changing the project theme.
+```
+
+Do not expand into:
+
+```text
+Blue/Green overengineering
+GitHub Actions deployment automation as the main topic
+EKS/GitOps migration
+ALB/RDS redesign
+Grafana dashboard work
 ```
 
 ## Safe claims by category
 
-Runtime evidence already supports:
+Runtime evidence supports:
 
 ```text
 EC2-based WEB/WAS/DB/Storage/Backup/Observability tiers were separated and configured.
@@ -361,28 +335,14 @@ Backup artifacts were created and then restored in a separate restore-lab enviro
 Logs, service state, request-path responses, and metrics were used to narrow DB service incidents.
 Prometheus metrics distinguished DB host reachability from PostgreSQL service failure.
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
+The enhanced work-order/evidence-file web workflow was validated as a lab runtime scenario.
+Upload-limit, latency, and DB web-impact scenarios were validated against the enhanced service model.
 ```
 
-Repository implementation supports:
+Still not claimed:
 
 ```text
-ops-sample-service now includes a lightweight web work-order/evidence-file workflow.
-The service includes web upload/download and DB/file consistency paths.
-The service includes failure-lab endpoints for slow request, DB sleep, file storage, and upload-limit inspection.
-```
-
-Still not claimed until enhanced runtime evidence exists:
-
-```text
-completed AWS runtime validation of the enhanced web workflow
-completed AWS runtime validation of evidence upload/download through Nginx/WAS/NFS/PostgreSQL
-completed service-level Nginx timeout, thread, connection-pool, or slow-query validation
-refreshed restore-lab validation against the enhanced service model
-```
-
-## Still not claimed
-
-```text
+production operations experience
 production monitoring maturity
 Grafana dashboard readiness
 Alertmanager notification maturity
@@ -392,6 +352,7 @@ automatic failover
 SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
-production service operation
 commercial ITSM implementation
+production disaster recovery
+RPO/RTO guarantee
 ```
