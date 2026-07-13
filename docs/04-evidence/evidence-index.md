@@ -10,7 +10,7 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 
 ## Evidence policy
 
-Raw runtime evidence is preserved locally under `.tmp` or `/tmp` archives and is not committed to the repository.
+Raw runtime evidence is preserved locally under `.tmp`, `/tmp`, or a local evidence archive outside the repository and is not committed to the repository.
 
 Repository evidence documents summarize:
 
@@ -22,7 +22,7 @@ evidence files collected
 observed outputs
 supported claims
 unsupported claims
-cleanup status
+cleanup or runtime-retention status
 ```
 
 The portfolio claim boundary is strict:
@@ -32,6 +32,7 @@ A backup artifact is not recovery proof by itself.
 Recovery is claimed only when restored DB/file data is validated in restore-lab through direct checks and HTTP/API consistency.
 A monitoring rule evaluation is not production monitoring maturity.
 A lab incident is not production operations experience.
+Connection-pressure validation is bounded lab evidence, not production load testing or capacity sizing.
 ```
 
 ## Current validation state
@@ -47,6 +48,7 @@ Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
 Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
+Phase 6A. bounded WEB/WAS/DB connection-pressure validation: completed
 ```
 
 Enhanced validation scope completed:
@@ -61,6 +63,16 @@ Restore-lab DB/file restore baseline: completed
 Restore-lab HTTP/API consistency validation: completed
 Source lab destroy: completed
 Restore lab destroy: completed
+```
+
+Connection-pressure validation completed:
+
+```text
+WAS request-thread pressure: delayed but successful DB-backed summary response
+HikariCP connection-pool pressure: DB-backed request failure while PostgreSQL stayed active
+Cross-tier evidence: Nginx access log, app journald, HikariCP pool state, PostgreSQL pg_stat_activity, HTTP status/timing metrics
+Runtime status: lab-full-ops EC2 environment intentionally retained for follow-up AWS validation work
+Cost control: NAT Gateway disabled after package installation and validation
 ```
 
 Current-state document:
@@ -89,6 +101,9 @@ docs/00-project/current-state-after-enhanced-runtime-validation.md
 | WAS sleep vs DB sleep latency behavior was validated | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | DB web-impact incident was validated against the enhanced service model | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | Restore-lab recovery was refreshed against the enhanced service model | `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` |
+| Bounded WEB/WAS/DB connection pressure was validated through Nginx, embedded Tomcat, HikariCP, and PostgreSQL | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
+| WAS request-thread pressure caused delayed but successful DB-backed API behavior | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
+| HikariCP pool pressure caused DB-backed API failure while PostgreSQL remained active | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
 
 ## Core evidence documents
 
@@ -324,6 +339,77 @@ DB web-impact behavior
 restore-lab recovery after enhanced service model
 ```
 
+### Connection pressure validation
+
+```text
+docs/04-evidence/connection-pressure-validation-2026-07-13.md
+```
+
+Bounded profile:
+
+```text
+baseline_tomcat_max_threads=4
+baseline_tomcat_min_spare_threads=2
+baseline_tomcat_accept_count=8
+baseline_hikari_max_pool_size=2
+baseline_hikari_min_idle=1
+baseline_hikari_connection_timeout_ms=3000
+```
+
+WAS request-thread pressure evidence:
+
+```text
+was_concurrency=4
+was_pressure_http_2xx=4
+was_summary_during_http_code=200
+was_summary_during_time_total=9.071659
+was_pressure_request_threads=http-nio-8080-exec-1,http-nio-8080-exec-2,http-nio-8080-exec-3,http-nio-8080-exec-4
+```
+
+HikariCP pool pressure evidence:
+
+```text
+db_concurrency=4
+db_pressure_http_2xx=2
+db_pressure_http_503=2
+db_summary_during_http_code=503
+db_pool_maximum_pool_size=2
+db_pool_active_connections=2
+db_pool_idle_connections=0
+db_pool_total_connections=2
+```
+
+PostgreSQL activity evidence:
+
+```text
+db_host=db-primary-01
+db_name=opsdb
+state=active
+wait_event_type=Timeout
+wait_event=PgSleep
+query=select pg_sleep($1)
+```
+
+Supported claims:
+
+```text
+WAS request-thread pressure caused delayed but successful DB-backed summary response.
+HikariCP connection-pool pressure caused DB-backed API failure while PostgreSQL remained active.
+Nginx access logs, app journald logs, HikariCP pool state, PostgreSQL pg_stat_activity, and HTTP status/timing metrics supported failure-mode distinction.
+```
+
+Unsupported claims:
+
+```text
+production load testing
+capacity sizing
+external Tomcat/WAR operation
+SLO/SLA validation
+autoscaling behavior
+PostgreSQL HA/failover
+production incident response experience
+```
+
 ## Service implementation references
 
 These documents describe the current enhanced service implementation:
@@ -336,7 +422,7 @@ docs/00-project/ops-sample-service-completion-scope.md
 
 ## Evidence archives kept locally
 
-Known local archives from validation windows include `.tmp/` or `/tmp` evidence bundles. They are intentionally not committed.
+Known local archives from validation windows include `.tmp/`, `/tmp`, or local evidence bundles outside the repository. They are intentionally not committed.
 
 Examples referenced by evidence documents include:
 
@@ -345,6 +431,7 @@ Examples referenced by evidence documents include:
 .tmp/observability-metrics-20260712T121325Z.tar.gz
 .tmp/observability-alert-20260712T131524Z.tar.gz
 .tmp/restore-lab-runtime-20260713T091446
+/mnt/c/Project/test/multitier-ops-platform-evidence/connection-pressure
 ```
 
 ## Claims not supported by this evidence set
@@ -365,6 +452,9 @@ AWS managed architecture operation
 commercial ITSM implementation
 production disaster recovery
 RPO/RTO guarantee
+production load testing
+capacity sizing
+external Tomcat/WAR operation
 ```
 
 ## Current portfolio-hardening work
@@ -388,4 +478,5 @@ docs/05-incident-reports/upload-limit-incident-report.md
 docs/05-incident-reports/latency-diagnosis-incident-report.md
 docs/05-incident-reports/db-web-impact-incident-report.md
 docs/05-incident-reports/restore-lab-recovery-incident-report.md
+docs/05-incident-reports/connection-pressure-incident-report.md
 ```
