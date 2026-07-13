@@ -25,6 +25,50 @@ unsupported claims
 cleanup status
 ```
 
+The portfolio claim boundary is strict:
+
+```text
+A backup artifact is not recovery proof by itself.
+Recovery is claimed only when restored DB/file data is validated in restore-lab through direct checks and HTTP/API consistency.
+A monitoring rule evaluation is not production monitoring maturity.
+A lab incident is not production operations experience.
+```
+
+## Current validation state
+
+```text
+Phase 0. lab-runtime smoke test: completed
+Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
+Phase 2A. lab-full-ops storage validation: completed
+Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
+Phase 3. restore-lab DB/file/API recovery validation: completed
+Phase 4A. observability logs/service/request-path evidence: completed
+Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
+Phase 4C. metric-based DB service incident diagnosis: completed
+Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
+Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
+```
+
+Enhanced validation scope completed:
+
+```text
+S1 enhanced service workflow validation: completed
+S2 upload-limit incident validation: completed
+S3 latency scenario validation: completed
+S4 DB web-impact incident validation: completed
+Backup baseline: completed
+Restore-lab DB/file restore baseline: completed
+Restore-lab HTTP/API consistency validation: completed
+Source lab destroy: completed
+Restore lab destroy: completed
+```
+
+Current-state document:
+
+```text
+docs/00-project/current-state-after-enhanced-runtime-validation.md
+```
+
 ## Claim map
 
 | Claim | Supporting evidence |
@@ -34,47 +78,17 @@ cleanup status
 | WAS failure and rolling restart behavior were validated | `docs/04-evidence/lab-full-min-continuous-operations-validation.md` |
 | Storage tier was integrated with DB metadata and NFS file objects | `docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md` |
 | Backup artifacts were created for DB metadata and file objects | `docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md` |
-| Recovery was validated in a separate restore-lab environment | `docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md` |
+| Recovery was validated in a separate restore-lab environment | `docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md`, `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` |
 | Logs, service state, and request paths support diagnosis | `docs/04-evidence/observability-baseline-validation-2026-07-12.md` |
 | Prometheus scraped node_exporter metrics from operating nodes | `docs/04-evidence/observability-metrics-validation-2026-07-12.md` |
 | Prometheus metrics distinguished DB host reachability from DB service failure | `docs/04-evidence/observability-metrics-validation-2026-07-12.md` |
 | Prometheus rule evaluation detected PostgreSQL inactivity while DB host stayed reachable | `docs/04-evidence/observability-alert-validation-2026-07-12.md` |
 | `ops-sample-service` includes a lightweight work-order/evidence-file web workflow | repository implementation: `apps/ops-sample-service/README.md`, `apps/ops-sample-service/FAILURE_LAB.md` |
-| Enhanced service workflow validation is prepared | `docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md`, `infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml` |
-
-## Current evidence boundary
-
-Existing runtime evidence was collected before the enhanced service implementation baseline was completed.
-
-Therefore, distinguish these two categories:
-
-```text
-Runtime-validated operations evidence:
-- WEB/WAS/DB normal path
-- storage consistency
-- backup artifact creation
-- restore-lab recovery
-- observability baseline
-- Prometheus metric/rule-based DB service incident diagnosis
-
-Repository implementation evidence:
-- work-order web pages
-- status history and audit logs
-- evidence upload/download workflow
-- WEB/WAS failure-lab endpoints
-
-Validation preparation:
-- enhanced service workflow validation playbook and runbook
-```
-
-Do not claim these until a new runtime validation window is completed:
-
-```text
-enhanced web workflow runtime validation through Nginx/WAS
-evidence upload/download runtime validation through Nginx/WAS/NFS/PostgreSQL
-failure-lab slow request and DB-sleep evidence with logs/metrics
-restore-lab refresh against the enhanced service model
-```
+| Enhanced service workflow was validated as a runtime operating scenario | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
+| Upload-limit incident was validated as a WEB/WAS operating scenario | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
+| WAS sleep vs DB sleep latency behavior was validated | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
+| DB web-impact incident was validated against the enhanced service model | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
+| Restore-lab recovery was refreshed against the enhanced service model | `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` |
 
 ## Core evidence documents
 
@@ -143,6 +157,24 @@ It does not by itself prove recovery.
 
 ```text
 docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
+docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
+```
+
+2026-07-13 restore-lab recovery used:
+
+```text
+source_backup_id=lab-full-ops-backup-20260712T182247
+pg_restore_status=validated
+restic_restore_status=validated
+actual_work_order_count=13
+actual_evidence_file_count=3
+restored_work_order_count=13
+api_consistency_status=consistent
+api_consistent=true
+file_exists=true
+size_matches=true
+checksum_matches=true
+http_api_restore_status=validated
 ```
 
 Supported evidence:
@@ -162,6 +194,17 @@ Supported claim:
 
 ```text
 Restore-lab DB/file/API recovery validation succeeded.
+```
+
+Unsupported claims:
+
+```text
+production disaster recovery
+RPO/RTO guarantee
+Multi-AZ high availability
+automatic failover
+continuous backup policy
+managed database recovery
 ```
 
 ### Observability baseline
@@ -246,9 +289,44 @@ This is rule evaluation evidence.
 It is not Alertmanager notification maturity evidence.
 ```
 
+### Enhanced service runtime validation
+
+```text
+docs/00-project/current-state-after-enhanced-runtime-validation.md
+```
+
+Completed validation scope:
+
+```text
+S1 enhanced service workflow validation
+S2 upload-limit incident validation
+S3 latency scenario validation
+S4 DB web-impact incident validation
+backup baseline
+restore-lab DB/file restore baseline
+restore-lab HTTP/API consistency validation
+source lab destroy
+restore lab destroy
+```
+
+Supported evidence categories:
+
+```text
+work-order page smoke
+work-order create/status-change workflow
+status history and audit log visibility
+evidence upload/download path
+DB metadata and NFS file object consistency
+request ID based WEB/WAS log correlation
+upload-limit behavior
+WAS sleep vs DB sleep latency behavior
+DB web-impact behavior
+restore-lab recovery after enhanced service model
+```
+
 ## Service implementation references
 
-These documents describe the current enhanced service implementation, but they are not runtime evidence documents by themselves:
+These documents describe the current enhanced service implementation:
 
 ```text
 apps/ops-sample-service/README.md
@@ -256,42 +334,18 @@ apps/ops-sample-service/FAILURE_LAB.md
 docs/00-project/ops-sample-service-completion-scope.md
 ```
 
-## Enhanced service validation preparation
-
-These files prepare the next runtime evidence window, but they are not proof that the runtime validation has already succeeded:
-
-```text
-docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
-infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
-```
-
-The prepared validation covers:
-
-```text
-/work-orders web page smoke
-/work-orders/new form smoke
-web-form work order creation
-web-form status transition
-event history and audit log visibility
-evidence upload through multipart form
-evidence download through web endpoint
-DB metadata and NFS file object consistency
-failure-lab sleep/db-sleep/file-storage-check/upload-limits
-Nginx request-id log sample
-app journald request-id log sample
-```
-
 ## Evidence archives kept locally
 
-Known local archives from the 2026-07-12 validation windows include:
+Known local archives from validation windows include `.tmp/` or `/tmp` evidence bundles. They are intentionally not committed.
+
+Examples referenced by evidence documents include:
 
 ```text
 .tmp/observability-baseline-20260712T110244Z.tar.gz
 .tmp/observability-metrics-20260712T121325Z.tar.gz
 .tmp/observability-alert-20260712T131524Z.tar.gz
+.tmp/restore-lab-runtime-20260713T091446
 ```
-
-Earlier backup/restore raw evidence archives were also preserved locally and are referenced in their evidence documents.
 
 ## Claims not supported by this evidence set
 
@@ -309,18 +363,29 @@ SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
 commercial ITSM implementation
-enhanced web workflow runtime validation completed
+production disaster recovery
+RPO/RTO guarantee
 ```
 
-## Current evidence status
+## Current portfolio-hardening work
+
+The next project phase is not additional feature work by default.
+
+Current focus:
 
 ```text
-Core operations evidence: sufficient for portfolio summary
-Storage/backup/restore evidence: sufficient for recovery narrative
-Observability evidence: sufficient for diagnosis narrative
-Service implementation evidence: baseline completed in repository code
-Enhanced service validation playbook: prepared, but runtime evidence pending
-Enhanced service runtime evidence: pending validation refresh
-Prometheus extension work: frozen after alert rule evaluation
-AWS runtime: not needed for docs/static prep; needed only for planned enhanced-service validation window
+incident report layer
+interview explanation notes
+portfolio summary quality
+claim-to-evidence readability
+optional VM/systemd deployment rollback validation if justified
+```
+
+Recommended incident report documents:
+
+```text
+docs/05-incident-reports/upload-limit-incident-report.md
+docs/05-incident-reports/latency-diagnosis-incident-report.md
+docs/05-incident-reports/db-web-impact-incident-report.md
+docs/05-incident-reports/restore-lab-recovery-incident-report.md
 ```
