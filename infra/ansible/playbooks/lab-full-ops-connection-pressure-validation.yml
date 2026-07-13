@@ -1,0 +1,559 @@
+---
+- name: Validate WEB/WAS/HikariCP/PostgreSQL connection pressure through nginx
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    connection_pressure_request_prefix: lab-full-ops-connection-pressure
+    connection_pressure_report_dir: /tmp/multitier-ops-platform
+    connection_pressure_result_dir: "{{ connection_pressure_report_dir }}/lab-full-ops-connection-pressure"
+    connection_pressure_report_file: "{{ connection_pressure_report_dir }}/lab-full-ops-connection-pressure-{{ inventory_hostname }}.txt"
+    connection_pressure_base_url: https://127.0.0.1
+    connection_pressure_app_log_host: "{{ groups['app'][0] | default('app-01') }}"
+    connection_pressure_db_host: db-primary-01
+    connection_pressure_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+    # Keep the scenario bounded. Use small Tomcat/Hikari settings during the app
+    # deployment step, then run this playbook only during a planned validation window.
+    connection_pressure_was_sleep_millis: 10000
+    connection_pressure_was_concurrency: 4
+    connection_pressure_db_hold_seconds: 10
+    connection_pressure_db_concurrency: 4
+    connection_pressure_curl_max_time_seconds: 20
+    connection_pressure_sample_delay_seconds: 1
+
+  pre_tasks:
+    - name: Assert dependent hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - connection_pressure_app_log_host in groups['app']
+          - groups['db'] is defined
+          - connection_pressure_db_host in groups['db']
+        fail_msg: "app and db hosts must exist before connection pressure validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this validation from nginx-01 through the web inventory group."
+
+    - name: Show runtime validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook validates service-linked WEB/WAS/DB pressure evidence through Nginx."
+          - "It does not tune for a production optimum; it collects bounded pressure evidence."
+          - "Expected prior step: deploy ops-sample-service with intentionally small Tomcat/Hikari settings when pressure is required."
+          - "Do not run Terraform apply/destroy just for this playbook alone."
+
+  tasks:
+    - name: Ensure connection pressure result directory exists
+      ansible.builtin.file:
+        path: "{{ connection_pressure_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Capture baseline service, WAS, DB pool, and work-order evidence
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ connection_pressure_result_dir }}"
+        base_url="{{ connection_pressure_base_url }}"
+        request_prefix="{{ connection_pressure_request_prefix }}"
+        max_time="{{ connection_pressure_curl_max_time_seconds | int }}"
+
+        failure_lab_html="${result_dir}/baseline-failure-lab.html"
+        was_runtime_json="${result_dir}/baseline-was-runtime.json"
+        was_runtime_headers="${result_dir}/baseline-was-runtime.headers"
+        was_runtime_metrics="${result_dir}/baseline-was-runtime.metrics"
+        db_pool_json="${result_dir}/baseline-db-pool.json"
+        db_pool_headers="${result_dir}/baseline-db-pool.headers"
+        db_pool_metrics="${result_dir}/baseline-db-pool.metrics"
+        summary_json="${result_dir}/baseline-work-orders-summary.json"
+        summary_headers="${result_dir}/baseline-work-orders-summary.headers"
+        summary_metrics="${result_dir}/baseline-work-orders-summary.metrics"
+        parsed_kv="${result_dir}/baseline-parsed.env"
+
+        curl -k -fsS --max-time "${max_time}" \
+          -H "X-Request-Id: ${request_prefix}-baseline-page" \
+          "${base_url}/ops/failure-lab" \
+          > "${failure_lab_html}"
+        grep -q "Failure Lab" "${failure_lab_html}"
+
+        curl -k -sS --max-time "${max_time}" \
+          -D "${was_runtime_headers}" \
+          -o "${was_runtime_json}" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-was-runtime" \
+          "${base_url}/api/failure-lab/was-runtime" \
+          > "${was_runtime_metrics}"
+
+        curl -k -sS --max-time "${max_time}" \
+          -D "${db_pool_headers}" \
+          -o "${db_pool_json}" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-db-pool" \
+          "${base_url}/api/failure-lab/db-pool" \
+          > "${db_pool_metrics}"
+
+        curl -k -sS --max-time "${max_time}" \
+          -D "${summary_headers}" \
+          -o "${summary_json}" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${summary_metrics}"
+
+        python3 - "${was_runtime_json}" "${was_runtime_metrics}" "${db_pool_json}" "${db_pool_metrics}" "${summary_metrics}" > "${parsed_kv}" <<'PY'
+        import json
+        import sys
+
+        was_runtime_json, was_runtime_metrics, db_pool_json, db_pool_metrics, summary_metrics = sys.argv[1:]
+
+        def read_metric(path):
+            raw = open(path, encoding='utf-8').read().strip().split()
+            if len(raw) != 2:
+                return '000', '0'
+            return raw[0], raw[1]
+
+        was_code, was_time = read_metric(was_runtime_metrics)
+        db_pool_code, db_pool_time = read_metric(db_pool_metrics)
+        summary_code, summary_time = read_metric(summary_metrics)
+
+        with open(was_runtime_json, encoding='utf-8') as fh:
+            was = json.load(fh)
+        with open(db_pool_json, encoding='utf-8') as fh:
+            db_pool = json.load(fh)
+
+        settings = was.get('wasRuntime', {}).get('settings', {})
+        pool_settings = db_pool.get('pool', {}).get('settings', {})
+
+        print(f"baseline_was_runtime_http_code={was_code}")
+        print(f"baseline_was_runtime_time_total={was_time}")
+        print(f"baseline_tomcat_max_threads={settings.get('maxThreads', 'n/a')}")
+        print(f"baseline_tomcat_min_spare_threads={settings.get('minSpareThreads', 'n/a')}")
+        print(f"baseline_tomcat_accept_count={settings.get('acceptCount', 'n/a')}")
+        print(f"baseline_tomcat_connection_timeout={settings.get('connectionTimeout', 'n/a')}")
+        print(f"baseline_db_pool_http_code={db_pool_code}")
+        print(f"baseline_db_pool_time_total={db_pool_time}")
+        print(f"baseline_hikari_max_pool_size={pool_settings.get('maximumPoolSize', 'n/a')}")
+        print(f"baseline_hikari_min_idle={pool_settings.get('minimumIdle', 'n/a')}")
+        print(f"baseline_hikari_connection_timeout_ms={pool_settings.get('connectionTimeoutMs', 'n/a')}")
+        print(f"baseline_summary_http_code={summary_code}")
+        print(f"baseline_summary_time_total={summary_time}")
+        PY
+
+        baseline_was_runtime_http_code=$(grep '^baseline_was_runtime_http_code=' "${parsed_kv}" | cut -d= -f2-)
+        baseline_db_pool_http_code=$(grep '^baseline_db_pool_http_code=' "${parsed_kv}" | cut -d= -f2-)
+        baseline_summary_http_code=$(grep '^baseline_summary_http_code=' "${parsed_kv}" | cut -d= -f2-)
+
+        test "${baseline_was_runtime_http_code}" = "200"
+        test "${baseline_db_pool_http_code}" = "200"
+        test "${baseline_summary_http_code}" = "200"
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: connection_pressure_baseline
+      changed_when: true
+
+    - name: Run bounded WAS thread pressure through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ connection_pressure_result_dir }}"
+        base_url="{{ connection_pressure_base_url }}"
+        request_prefix="{{ connection_pressure_request_prefix }}"
+        sleep_millis="{{ connection_pressure_was_sleep_millis | int }}"
+        concurrency="{{ connection_pressure_was_concurrency | int }}"
+        max_time="{{ connection_pressure_curl_max_time_seconds | int }}"
+        sample_delay="{{ connection_pressure_sample_delay_seconds | int }}"
+        pressure_dir="${result_dir}/was-thread-pressure"
+        parsed_kv="${pressure_dir}/was-thread-pressure-parsed.env"
+
+        rm -rf "${pressure_dir}"
+        mkdir -p "${pressure_dir}"
+
+        for i in $(seq 1 "${concurrency}"); do
+          (
+            set +e
+            curl -k -sS --max-time "${max_time}" \
+              -D "${pressure_dir}/sleep-${i}.headers" \
+              -o "${pressure_dir}/sleep-${i}.json" \
+              -w '%{http_code} %{time_total}\n' \
+              -H "X-Request-Id: ${request_prefix}-was-sleep-${i}" \
+              "${base_url}/api/failure-lab/sleep?millis=${sleep_millis}" \
+              > "${pressure_dir}/sleep-${i}.metrics" 2> "${pressure_dir}/sleep-${i}.stderr"
+            echo "$?" > "${pressure_dir}/sleep-${i}.rc"
+          ) &
+          echo "$!" > "${pressure_dir}/sleep-${i}.pid"
+        done
+
+        sleep "${sample_delay}"
+
+        set +e
+        curl -k -sS --max-time "${max_time}" \
+          -D "${pressure_dir}/summary-during.headers" \
+          -o "${pressure_dir}/summary-during.json" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-was-summary-during" \
+          "${base_url}/api/work-orders/summary" \
+          > "${pressure_dir}/summary-during.metrics" 2> "${pressure_dir}/summary-during.stderr"
+        echo "$?" > "${pressure_dir}/summary-during.rc"
+
+        curl -k -sS --max-time "${max_time}" \
+          -D "${pressure_dir}/was-runtime-during.headers" \
+          -o "${pressure_dir}/was-runtime-during.json" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-was-runtime-during" \
+          "${base_url}/api/failure-lab/was-runtime" \
+          > "${pressure_dir}/was-runtime-during.metrics" 2> "${pressure_dir}/was-runtime-during.stderr"
+        echo "$?" > "${pressure_dir}/was-runtime-during.rc"
+        set -e
+
+        for i in $(seq 1 "${concurrency}"); do
+          pid=$(cat "${pressure_dir}/sleep-${i}.pid")
+          wait "${pid}" || true
+        done
+
+        python3 - "${pressure_dir}" "${concurrency}" > "${parsed_kv}" <<'PY'
+        import json
+        import pathlib
+        import statistics
+        import sys
+
+        pressure_dir = pathlib.Path(sys.argv[1])
+        concurrency = int(sys.argv[2])
+
+        def read_text(path, default=''):
+            try:
+                return pathlib.Path(path).read_text(encoding='utf-8').strip()
+            except FileNotFoundError:
+                return default
+
+        def read_metric(path):
+            raw = read_text(path, '000 0').split()
+            if len(raw) != 2:
+                return '000', 0.0
+            try:
+                return raw[0], float(raw[1])
+            except ValueError:
+                return raw[0], 0.0
+
+        completed = 0
+        curl_success = 0
+        http_2xx = 0
+        http_non_2xx = 0
+        scenarios = []
+        durations = []
+        time_totals = []
+        threads = []
+
+        for i in range(1, concurrency + 1):
+            rc = read_text(pressure_dir / f'sleep-{i}.rc', 'missing')
+            code, time_total = read_metric(pressure_dir / f'sleep-{i}.metrics')
+            if rc != 'missing':
+                completed += 1
+            if rc == '0':
+                curl_success += 1
+            if code.startswith('2'):
+                http_2xx += 1
+            else:
+                http_non_2xx += 1
+            time_totals.append(time_total)
+
+            json_path = pressure_dir / f'sleep-{i}.json'
+            if json_path.exists() and json_path.stat().st_size > 0:
+                try:
+                    payload = json.loads(json_path.read_text(encoding='utf-8'))
+                    scenarios.append(str(payload.get('scenario', 'n/a')))
+                    durations.append(float(payload.get('durationMs', 0)))
+                    threads.append(str(payload.get('thread', 'n/a')))
+                except Exception:
+                    pass
+
+        summary_rc = read_text(pressure_dir / 'summary-during.rc', 'missing')
+        summary_code, summary_time = read_metric(pressure_dir / 'summary-during.metrics')
+        was_runtime_rc = read_text(pressure_dir / 'was-runtime-during.rc', 'missing')
+        was_runtime_code, was_runtime_time = read_metric(pressure_dir / 'was-runtime-during.metrics')
+
+        runtime_settings = {}
+        runtime_threads = {}
+        runtime_json = pressure_dir / 'was-runtime-during.json'
+        if runtime_json.exists() and runtime_json.stat().st_size > 0:
+            try:
+                payload = json.loads(runtime_json.read_text(encoding='utf-8'))
+                was_runtime = payload.get('wasRuntime', {})
+                runtime_settings = was_runtime.get('settings', {})
+                runtime_threads = was_runtime.get('threads', {})
+            except Exception:
+                pass
+
+        print(f"was_pressure_expected_concurrency={concurrency}")
+        print(f"was_pressure_completed={completed}")
+        print(f"was_pressure_curl_success={curl_success}")
+        print(f"was_pressure_http_2xx={http_2xx}")
+        print(f"was_pressure_http_non_2xx={http_non_2xx}")
+        print(f"was_pressure_max_time_total={max(time_totals) if time_totals else 0}")
+        print(f"was_pressure_avg_time_total={statistics.mean(time_totals) if time_totals else 0}")
+        print(f"was_pressure_max_duration_ms={max(durations) if durations else 0}")
+        print(f"was_pressure_scenarios={','.join(sorted(set(scenarios))) if scenarios else 'n/a'}")
+        print(f"was_pressure_request_threads={','.join(sorted(set(threads))) if threads else 'n/a'}")
+        print(f"was_summary_during_curl_rc={summary_rc}")
+        print(f"was_summary_during_http_code={summary_code}")
+        print(f"was_summary_during_time_total={summary_time}")
+        print(f"was_runtime_during_curl_rc={was_runtime_rc}")
+        print(f"was_runtime_during_http_code={was_runtime_code}")
+        print(f"was_runtime_during_time_total={was_runtime_time}")
+        print(f"was_runtime_tomcat_max_threads={runtime_settings.get('maxThreads', 'n/a')}")
+        print(f"was_runtime_tomcat_accept_count={runtime_settings.get('acceptCount', 'n/a')}")
+        print(f"was_runtime_live_thread_count={runtime_threads.get('liveThreadCount', 'n/a')}")
+        print(f"was_runtime_peak_thread_count={runtime_threads.get('peakThreadCount', 'n/a')}")
+        PY
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: connection_pressure_was_pressure
+      changed_when: true
+
+    - name: Run bounded HikariCP connection pressure through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ connection_pressure_result_dir }}"
+        base_url="{{ connection_pressure_base_url }}"
+        request_prefix="{{ connection_pressure_request_prefix }}"
+        hold_seconds="{{ connection_pressure_db_hold_seconds | int }}"
+        concurrency="{{ connection_pressure_db_concurrency | int }}"
+        max_time="{{ connection_pressure_curl_max_time_seconds | int }}"
+        sample_delay="{{ connection_pressure_sample_delay_seconds | int }}"
+        pressure_dir="${result_dir}/hikari-pool-pressure"
+        parsed_kv="${pressure_dir}/hikari-pool-pressure-parsed.env"
+
+        rm -rf "${pressure_dir}"
+        mkdir -p "${pressure_dir}"
+
+        for i in $(seq 1 "${concurrency}"); do
+          (
+            set +e
+            curl -k -sS --max-time "${max_time}" \
+              -D "${pressure_dir}/db-hold-${i}.headers" \
+              -o "${pressure_dir}/db-hold-${i}.json" \
+              -w '%{http_code} %{time_total}\n' \
+              -H "X-Request-Id: ${request_prefix}-db-hold-${i}" \
+              "${base_url}/api/failure-lab/db-hold?seconds=${hold_seconds}" \
+              > "${pressure_dir}/db-hold-${i}.metrics" 2> "${pressure_dir}/db-hold-${i}.stderr"
+            echo "$?" > "${pressure_dir}/db-hold-${i}.rc"
+          ) &
+          echo "$!" > "${pressure_dir}/db-hold-${i}.pid"
+        done
+
+        sleep "${sample_delay}"
+
+        set +e
+        curl -k -sS --max-time "${max_time}" \
+          -D "${pressure_dir}/summary-during.headers" \
+          -o "${pressure_dir}/summary-during.json" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-db-summary-during" \
+          "${base_url}/api/work-orders/summary" \
+          > "${pressure_dir}/summary-during.metrics" 2> "${pressure_dir}/summary-during.stderr"
+        echo "$?" > "${pressure_dir}/summary-during.rc"
+
+        curl -k -sS --max-time "${max_time}" \
+          -D "${pressure_dir}/db-pool-during.headers" \
+          -o "${pressure_dir}/db-pool-during.json" \
+          -w '%{http_code} %{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-db-pool-during" \
+          "${base_url}/api/failure-lab/db-pool" \
+          > "${pressure_dir}/db-pool-during.metrics" 2> "${pressure_dir}/db-pool-during.stderr"
+        echo "$?" > "${pressure_dir}/db-pool-during.rc"
+        set -e
+
+        for i in $(seq 1 "${concurrency}"); do
+          pid=$(cat "${pressure_dir}/db-hold-${i}.pid")
+          wait "${pid}" || true
+        done
+
+        python3 - "${pressure_dir}" "${concurrency}" > "${parsed_kv}" <<'PY'
+        import json
+        import pathlib
+        import statistics
+        import sys
+
+        pressure_dir = pathlib.Path(sys.argv[1])
+        concurrency = int(sys.argv[2])
+
+        def read_text(path, default=''):
+            try:
+                return pathlib.Path(path).read_text(encoding='utf-8').strip()
+            except FileNotFoundError:
+                return default
+
+        def read_metric(path):
+            raw = read_text(path, '000 0').split()
+            if len(raw) != 2:
+                return '000', 0.0
+            try:
+                return raw[0], float(raw[1])
+            except ValueError:
+                return raw[0], 0.0
+
+        completed = 0
+        curl_success = 0
+        http_2xx = 0
+        http_503 = 0
+        http_other = 0
+        scenarios = []
+        durations = []
+        time_totals = []
+        messages = []
+
+        for i in range(1, concurrency + 1):
+            rc = read_text(pressure_dir / f'db-hold-{i}.rc', 'missing')
+            code, time_total = read_metric(pressure_dir / f'db-hold-{i}.metrics')
+            if rc != 'missing':
+                completed += 1
+            if rc == '0':
+                curl_success += 1
+            if code.startswith('2'):
+                http_2xx += 1
+            elif code == '503':
+                http_503 += 1
+            else:
+                http_other += 1
+            time_totals.append(time_total)
+
+            json_path = pressure_dir / f'db-hold-{i}.json'
+            if json_path.exists() and json_path.stat().st_size > 0:
+                try:
+                    payload = json.loads(json_path.read_text(encoding='utf-8'))
+                    scenarios.append(str(payload.get('scenario', 'n/a')))
+                    durations.append(float(payload.get('durationMs', 0)))
+                    if payload.get('message'):
+                        messages.append(str(payload.get('message')).replace('\n', ' ')[:160])
+                except Exception:
+                    pass
+
+        summary_rc = read_text(pressure_dir / 'summary-during.rc', 'missing')
+        summary_code, summary_time = read_metric(pressure_dir / 'summary-during.metrics')
+        db_pool_rc = read_text(pressure_dir / 'db-pool-during.rc', 'missing')
+        db_pool_code, db_pool_time = read_metric(pressure_dir / 'db-pool-during.metrics')
+
+        pool_state = {}
+        pool_json = pressure_dir / 'db-pool-during.json'
+        if pool_json.exists() and pool_json.stat().st_size > 0:
+            try:
+                payload = json.loads(pool_json.read_text(encoding='utf-8'))
+                pool_state = payload.get('pool', {})
+            except Exception:
+                pass
+
+        pool_settings = pool_state.get('settings', {}) if isinstance(pool_state, dict) else {}
+
+        print(f"db_pressure_expected_concurrency={concurrency}")
+        print(f"db_pressure_completed={completed}")
+        print(f"db_pressure_curl_success={curl_success}")
+        print(f"db_pressure_http_2xx={http_2xx}")
+        print(f"db_pressure_http_503={http_503}")
+        print(f"db_pressure_http_other={http_other}")
+        print(f"db_pressure_max_time_total={max(time_totals) if time_totals else 0}")
+        print(f"db_pressure_avg_time_total={statistics.mean(time_totals) if time_totals else 0}")
+        print(f"db_pressure_max_duration_ms={max(durations) if durations else 0}")
+        print(f"db_pressure_scenarios={','.join(sorted(set(scenarios))) if scenarios else 'n/a'}")
+        print(f"db_pressure_messages={' | '.join(messages) if messages else 'n/a'}")
+        print(f"db_summary_during_curl_rc={summary_rc}")
+        print(f"db_summary_during_http_code={summary_code}")
+        print(f"db_summary_during_time_total={summary_time}")
+        print(f"db_pool_during_curl_rc={db_pool_rc}")
+        print(f"db_pool_during_http_code={db_pool_code}")
+        print(f"db_pool_during_time_total={db_pool_time}")
+        print(f"db_pool_maximum_pool_size={pool_settings.get('maximumPoolSize', 'n/a')}")
+        print(f"db_pool_active_connections={pool_state.get('activeConnections', 'n/a') if isinstance(pool_state, dict) else 'n/a'}")
+        print(f"db_pool_idle_connections={pool_state.get('idleConnections', 'n/a') if isinstance(pool_state, dict) else 'n/a'}")
+        print(f"db_pool_total_connections={pool_state.get('totalConnections', 'n/a') if isinstance(pool_state, dict) else 'n/a'}")
+        print(f"db_pool_threads_awaiting_connection={pool_state.get('threadsAwaitingConnection', 'n/a') if isinstance(pool_state, dict) else 'n/a'}")
+        PY
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: connection_pressure_db_pressure
+      changed_when: true
+
+    - name: Sample PostgreSQL pg_stat_activity after DB pressure
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ connection_pressure_db_name }} -AtF $'\t' -c \
+          "select pid, application_name, state, wait_event_type, wait_event, now() - query_start as age, left(query, 120) from pg_stat_activity where datname = '{{ connection_pressure_db_name }}' and pid <> pg_backend_pid() order by query_start desc limit 20;"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ connection_pressure_db_host }}"
+      register: connection_pressure_pg_stat_activity_sample
+      changed_when: false
+      failed_when: connection_pressure_pg_stat_activity_sample.rc != 0
+
+    - name: Read connection pressure Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ connection_pressure_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 120 || true"
+      register: connection_pressure_nginx_access_log
+      changed_when: false
+
+    - name: Read connection pressure app journald evidence
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-45 min' | grep '{{ connection_pressure_request_prefix }}' | tail -n 120 || true"
+      delegate_to: "{{ connection_pressure_app_log_host }}"
+      register: connection_pressure_app_log
+      changed_when: false
+
+    - name: Write connection pressure validation report
+      ansible.builtin.copy:
+        dest: "{{ connection_pressure_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name }}
+          environment={{ environment_name }}
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          validation=connection-pressure-validation
+          request_prefix={{ connection_pressure_request_prefix }}
+          base_url={{ connection_pressure_base_url }}
+          result_dir={{ connection_pressure_result_dir }}
+
+          [baseline]
+          {{ connection_pressure_baseline.stdout | default('n/a') }}
+
+          [was_thread_pressure]
+          was_sleep_millis={{ connection_pressure_was_sleep_millis }}
+          was_concurrency={{ connection_pressure_was_concurrency }}
+          {{ connection_pressure_was_pressure.stdout | default('n/a') }}
+
+          [hikari_pool_pressure]
+          db_hold_seconds={{ connection_pressure_db_hold_seconds }}
+          db_concurrency={{ connection_pressure_db_concurrency }}
+          {{ connection_pressure_db_pressure.stdout | default('n/a') }}
+
+          [postgresql_pg_stat_activity]
+          db_host={{ connection_pressure_db_host }}
+          db_name={{ connection_pressure_db_name }}
+          {{ connection_pressure_pg_stat_activity_sample.stdout | default('n/a') }}
+
+          [nginx_access_log]
+          {{ connection_pressure_nginx_access_log.stdout | default('n/a') }}
+
+          [app_journald]
+          app_log_host={{ connection_pressure_app_log_host }}
+          {{ connection_pressure_app_log.stdout | default('n/a') }}
+
+          [interpretation]
+          supported=bounded evidence for Nginx -> embedded Tomcat WAS thread pressure -> HikariCP pool pressure -> PostgreSQL activity correlation
+          unsupported=production load-test result, capacity sizing, SLO/SLA, external Tomcat operation, automatic scaling
+
+    - name: Display connection pressure validation report
+      ansible.builtin.command: "cat {{ connection_pressure_report_file }}"
+      register: connection_pressure_report
+      changed_when: false
+
+    - name: Show connection pressure validation report
+      ansible.builtin.debug:
+        var: connection_pressure_report.stdout_lines
