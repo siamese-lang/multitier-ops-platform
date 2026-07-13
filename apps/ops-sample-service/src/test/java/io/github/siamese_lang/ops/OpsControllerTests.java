@@ -34,4 +34,14 @@ class OpsControllerTests {
         assertThat(response.getBody()).containsEntry("scenario", "db_pool");
         assertThat(response.getBody()).containsKeys("db", "pool", "node", "durationMs");
     }
+
+    @Test
+    void wasRuntimeEndpointReturnsEmbeddedTomcatEvidence() {
+        ResponseEntity<Map> response = restTemplate.getForEntity("/api/failure-lab/was-runtime", Map.class);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody()).containsEntry("scenario", "was_runtime");
+        assertThat(response.getBody()).containsKeys("wasRuntime", "dbPool", "node", "durationMs");
+    }
 }
