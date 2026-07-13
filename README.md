@@ -33,7 +33,7 @@
 8. DB metadata와 file object consistency 확인
 9. /healthz와 /readyz 분리
 10. request ID 기반 로그 추적
-11. WEB/WAS failure-lab: sleep, DB sleep, file storage check, upload-limit inspection
+11. WEB/WAS failure-lab: sleep, DB sleep, DB hold, DB pool, WAS runtime, file storage check, upload-limit inspection
 ```
 
 면접에서는 아래처럼 설명합니다.
@@ -82,6 +82,7 @@ Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
 Phase 5E. enhanced service runtime validation: completed as first enhanced validation pass
+Phase 6A. bounded WEB/WAS/DB connection-pressure validation: completed
 ```
 
 Phase 5E에서 검증한 범위:
@@ -98,7 +99,17 @@ Source lab destroy: completed
 Restore lab destroy: completed
 ```
 
-이 결과는 프로젝트 종료를 의미하지 않습니다. 현재 단계는 **1차 enhanced runtime evidence를 확보한 뒤, 인프라/WAS 운영 면접에서 설명 가능한 incident report와 evidence map으로 포트폴리오 완성도를 높이는 단계**입니다.
+Phase 6A에서 검증한 범위:
+
+```text
+WAS request-thread pressure: delayed but successful DB-backed summary response
+HikariCP connection-pool pressure: DB-backed request failure while PostgreSQL stayed active
+Cross-tier evidence: Nginx access log, app journald, HikariCP pool state, PostgreSQL pg_stat_activity, HTTP status/timing metrics
+Runtime status: lab-full-ops EC2 environment intentionally retained for follow-up AWS validation work
+Cost control: NAT Gateway disabled after package installation and validation
+```
+
+이 결과는 프로젝트 종료를 의미하지 않습니다. 현재 단계는 **runtime evidence를 확보한 뒤, 인프라/WAS 운영 면접에서 설명 가능한 incident report와 evidence map으로 포트폴리오 완성도를 높이는 단계**입니다.
 
 ## 검증한 운영 시나리오
 
@@ -123,6 +134,8 @@ Runtime evidence로 검증한 항목:
 16. request ID 기반 WEB/WAS 로그 추적
 17. Nginx timeout, WAS slow request, DB slow path 검증
 18. 보강된 서비스 모델 기준 restore-lab 복구 검증
+19. embedded Tomcat request-thread pressure와 DB-backed API 지연 구분
+20. HikariCP connection-pool pressure와 PostgreSQL active 상태 구분
 ```
 
 ## 대표 토폴로지
@@ -207,6 +220,7 @@ docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
 docs/04-evidence/observability-baseline-validation-2026-07-12.md
 docs/04-evidence/observability-metrics-validation-2026-07-12.md
 docs/04-evidence/observability-alert-validation-2026-07-12.md
+docs/04-evidence/connection-pressure-validation-2026-07-13.md
 docs/00-project/current-state-after-enhanced-runtime-validation.md
 ```
 
@@ -220,6 +234,7 @@ docs/05-incident-reports/upload-limit-incident-report.md
 docs/05-incident-reports/latency-diagnosis-incident-report.md
 docs/05-incident-reports/db-web-impact-incident-report.md
 docs/05-incident-reports/restore-lab-recovery-incident-report.md
+docs/05-incident-reports/connection-pressure-incident-report.md
 docs/00-project/interview-incident-qna.md
 docs/00-project/interview-explanation-notes.md
 ```
@@ -232,8 +247,9 @@ docs/00-project/interview-explanation-notes.md
 | Terraform | 실험 환경 생성·삭제 자동화 | 프로젝트 주제가 아니라 supporting tool |
 | Ansible | 서버 설정과 운영 절차 재현 자동화 | role 자체보다 운영 설정 일관성이 중요 |
 | Nginx | WEB/reverse proxy 계층 | upstream, timeout, access/error log 분석 대상 |
-| Spring Boot/Tomcat | WAS 계층, 경량 업무 서비스 실행 | Spring Boot 기능 개발 포트폴리오가 아님 |
-| PostgreSQL | 작업 요청·이력·파일 metadata 저장 | connection, metadata, backup, restore, service-state 분석 대상 |
+| Spring Boot/embedded Tomcat | WAS 계층, 경량 업무 서비스 실행, request-thread pressure 관찰 | 외부 Tomcat/WAR 운영 경험으로 과장하지 않음 |
+| HikariCP | WAS-side DB connection pool pressure 관찰 | production capacity sizing 근거가 아님 |
+| PostgreSQL | 작업 요청·이력·파일 metadata 저장, pg_stat_activity 확인 | connection, metadata, backup, restore, service-state 분석 대상 |
 | NFS/filesystem | 증빙 파일 object 저장 | DB metadata와 file object consistency 검증 대상 |
 | pg_dump/restic | 백업·복구 검증 도구 | backup creation과 restore validation을 구분 |
 | node_exporter/Prometheus | 장애 분석용 지표 evidence | dashboard 자체가 목적이 아님 |
@@ -250,6 +266,8 @@ EC2 기반 WEB/WAS/DB/Storage/Backup 계층을 분리 구성했다.
 DB metadata와 NFS file object consistency를 검증했다.
 작업 요청·증빙 파일 웹 업무 흐름을 Nginx/WAS/PostgreSQL/NFS 경로에서 검증했다.
 업로드 제한, 지연, DB 장애 영향을 서비스 기능과 연결해 확인했다.
+embedded Tomcat request-thread pressure와 HikariCP connection-pool pressure를 구분했다.
+PostgreSQL이 active인 상태에서도 WAS-side DB connection pool 고갈로 DB-backed API가 실패할 수 있음을 확인했다.
 로그·서비스 상태·request path를 통해 장애 원인을 계층별로 좁혔다.
 Prometheus metrics로 DB host reachability와 PostgreSQL service failure를 구분했다.
 Prometheus rule evaluation으로 PostgreSQL service inactivity를 감지했다.
@@ -268,7 +286,7 @@ WEB/WAS failure-lab endpoint가 구현되어 있다.
 
 ```text
 현재 evidence는 포트폴리오용 lab validation evidence다.
-실제 production 운영 경험, HA, 자동 failover, SLO/SLA, RPO/RTO 보장으로 과장하지 않는다.
+실제 production 운영 경험, production load testing, capacity sizing, HA, 자동 failover, SLO/SLA, RPO/RTO 보장으로 과장하지 않는다.
 ```
 
 ## 주장하지 않는 것
@@ -284,6 +302,9 @@ SLO/SLA compliance
 Kubernetes/EKS/GitOps 운영 경험
 AWS managed architecture 운영 경험
 production service 운영 경험
+production load testing
+capacity sizing
+external Tomcat/WAR 운영 경험
 commercial ITSM 구현 경험
 ```
 
@@ -301,10 +322,12 @@ AWS runtime validation은 필요할 때만 수행합니다. 작은 PR마다 Terr
 추가 운영 시나리오
 -> 명시적 runtime validation window
 -> evidence 수집
--> destroy once
+-> 후속 AWS 작업이 있으면 EC2 lab 유지 가능
+-> 비용 리스크가 큰 NAT Gateway는 검증 후 비활성화
+-> 후속 작업이 없을 때 전체 destroy
 ```
 
-NAT Gateway를 켠 검증 창은 비용 리스크가 있으므로 evidence 수집 후 즉시 destroy합니다.
+NAT Gateway를 켠 검증 창은 비용 리스크가 있으므로, 패키지 설치와 evidence 수집이 끝나면 NAT Gateway를 비활성화합니다. 후속 AWS 검증이 예정되어 있으면 EC2 lab은 유지하고, 후속 작업이 없을 때 전체 destroy합니다.
 
 ## 현재 다음 작업
 
