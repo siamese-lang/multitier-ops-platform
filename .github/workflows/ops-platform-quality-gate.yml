@@ -1,0 +1,96 @@
+name: ops-platform-quality-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/ops-sample-service/**"
+      - "infra/ansible/**"
+      - ".github/workflows/ops-platform-quality-gate.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/ops-sample-service/**"
+      - "infra/ansible/**"
+      - ".github/workflows/ops-platform-quality-gate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  app-build-test:
+    name: App build and tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/ops-sample-service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Run Maven tests
+        run: mvn -B test
+
+      - name: Build service jar
+        run: mvn -B clean package
+
+      - name: Verify jar artifact exists
+        run: test -s target/ops-sample-service-0.1.0.jar
+
+  ansible-syntax:
+    name: Ansible syntax checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/ansible
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-core
+        run: python -m pip install --upgrade pip ansible-core
+
+      - name: Show Ansible version
+        run: ansible --version
+
+      - name: Validate CI inventory parses
+        run: ansible-inventory -i inventories/ci/hosts.yml --list >/tmp/ci-inventory.json
+
+      - name: Syntax check high-value operating playbooks
+        run: |
+          set -euo pipefail
+          export ANSIBLE_CONFIG="$PWD/ansible.cfg"
+
+          playbooks=(
+            playbooks/lab-full-min-ops-sample-service.yml
+            playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
+            playbooks/lab-full-ops-enhanced-upload-limit-incident.yml
+            playbooks/lab-full-ops-enhanced-latency-scenario.yml
+            playbooks/lab-full-ops-enhanced-db-web-impact-incident.yml
+            playbooks/lab-full-ops-deployment-rollback-validation.yml
+            playbooks/restore-lab-db-file-restore-baseline.yml
+            playbooks/restore-lab-http-api-consistency-check.yml
+          )
+
+          for playbook in "${playbooks[@]}"; do
+            echo "::group::ansible syntax-check ${playbook}"
+            ansible-playbook -i inventories/ci/hosts.yml "${playbook}" --syntax-check
+            echo "::endgroup::"
+          done
