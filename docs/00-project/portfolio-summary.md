@@ -54,9 +54,13 @@ It demonstrates that the operator can:
 4. Reproduce failures and identify which tier should be inspected first.
 5. Use logs, service state, metrics, checksums, HTTP status, timing, and API responses as evidence.
 6. Distinguish embedded Tomcat request-thread pressure from HikariCP DB connection-pool pressure.
-7. Create backup artifacts and prove recovery in a separate restore-lab environment.
-8. Keep application features small while making the operated service explainable.
-9. Document supported claims without overclaiming production maturity.
+7. Validate WEB-tier Nginx config rejection and rollback.
+8. Validate WAS artifact rollback with systemd, health, version, readiness, and DB-backed checks.
+9. Validate app-side NFS mount failure and recovery with DB/file consistency checks.
+10. Create backup artifacts and prove recovery in a separate restore-lab environment.
+11. Destroy temporary AWS lab resources after evidence collection.
+12. Keep application features small while making the operated service explainable.
+13. Document supported claims without overclaiming production maturity.
 ```
 
 ## Main runtime topology
@@ -90,6 +94,23 @@ operator -> nginx-01:443 -> app-01 embedded Tomcat -> HikariCP -> db-primary-01:
 backup-01 -> db-primary-01:5432
 backup-01 -> nfs-01:/srv/ops-sample/files
 mon-01    -> node_exporter on WEB/WAS/DB/Storage/Backup nodes
+```
+
+## Final runtime validation state
+
+```text
+lab-full-ops AWS runtime validation: completed
+connection pressure validation: completed
+bad deployment rollback validation: completed
+NFS mount failure/recovery validation: completed
+Nginx config rollback validation: completed
+AWS lab cleanup/destroy: completed
+```
+
+Final summary document:
+
+```text
+docs/04-evidence/final-runtime-validation-2026-07-13.md
 ```
 
 ## Key validation outcomes
@@ -176,13 +197,69 @@ Supported interpretation:
 The project can distinguish a delayed API caused by WAS request-thread pressure from a failed DB-backed API caused by WAS-side DB connection-pool exhaustion.
 ```
 
-Boundary:
+### 6. Bad deployment rollback validation
+
+Validated with bounded lab runtime evidence:
 
 ```text
-This is bounded lab evidence. It is not production load testing, capacity sizing, or external Tomcat/WAR operation.
+bad WAS artifact deployment produced observable service/health failure
+previous jar and environment file were restored
+rollback health check succeeded
+rollback version check succeeded
+rollback readiness check succeeded
+rollback DB-backed summary check succeeded
+final systemd service state returned to active
 ```
 
-### 6. Backup artifact creation
+Supported interpretation:
+
+```text
+The project can identify a VM/systemd WAS artifact deployment failure and verify rollback with process, version, readiness, and DB-backed service checks.
+```
+
+### 7. NFS mount failure and recovery validation
+
+Validated with bounded lab runtime evidence:
+
+```text
+baseline NFS mount and file-storage readiness were healthy
+app-side NFS mount was intentionally unmounted
+file-storage readiness became false
+DB-backed work-order creation still returned 201 Created
+evidence-file creation returned 503 storage-not-ready
+NFS remount restored the storage path
+recovery evidence creation and consistency checks succeeded
+NFS file object existed with matching size and SHA-256
+```
+
+Supported interpretation:
+
+```text
+The project can distinguish a DB-backed business path that remains available from a file-storage-dependent path that fails due to app-side NFS mount loss.
+```
+
+### 8. Nginx config rollback validation
+
+Validated with bounded lab runtime evidence:
+
+```text
+baseline Nginx proxied health/version/summary checks succeeded
+invalid Nginx config candidate was written
+nginx -t rejected the bad candidate before unsafe reload
+running Nginx stayed active while the bad config existed on disk
+previous site config was restored
+restored nginx -t succeeded
+Nginx reload succeeded
+post-rollback health/version/summary checks succeeded
+```
+
+Supported interpretation:
+
+```text
+The project can validate WEB-tier config candidates before reload and restore a known-good Nginx config when a bad candidate is detected.
+```
+
+### 9. Backup artifact creation
 
 Validated with runtime evidence:
 
@@ -200,7 +277,7 @@ Backup artifact creation alone is not a recovery claim.
 Recovery was proven separately in restore-lab.
 ```
 
-### 7. Restore-lab recovery
+### 10. Restore-lab recovery
 
 Validated with runtime evidence:
 
@@ -219,7 +296,7 @@ Supported claim:
 Restore-lab DB/file/API recovery validation succeeded.
 ```
 
-### 8. Observability and incident diagnosis
+### 11. Observability and incident diagnosis
 
 Validated with runtime evidence:
 
@@ -239,6 +316,15 @@ Supported diagnostic claims:
 Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
 Prometheus metrics helped distinguish DB host reachability from DB service dependency failure.
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
+```
+
+### 12. Runtime cleanup
+
+Validated after evidence collection:
+
+```text
+AWS lab runtime was destroyed after final validation.
+No new AWS runtime is planned by default.
 ```
 
 ## Interview-ready incident reports
@@ -263,7 +349,10 @@ Recommended interview sequence:
 3. Explain latency diagnosis as WAS-side delay vs DB-backed delay.
 4. Explain DB web-impact as health vs readiness and dependency failure.
 5. Explain connection pressure as embedded Tomcat thread pressure vs HikariCP pool exhaustion.
-6. Explain restore-lab as the difference between backup artifact creation and recovery proof.
+6. Explain bad deployment rollback as VM/systemd WAS artifact rollback.
+7. Explain NFS mount failure as DB-backed path vs file-storage-dependent path separation.
+8. Explain Nginx config rollback as WEB-tier config validation before unsafe reload.
+9. Explain restore-lab as the difference between backup artifact creation and recovery proof.
 ```
 
 Scenario-specific Q&A:
@@ -282,6 +371,7 @@ docs/00-project/portfolio-review-guide.md
 
 ```text
 docs/04-evidence/evidence-index.md
+docs/04-evidence/final-runtime-validation-2026-07-13.md
 docs/00-project/current-state-after-enhanced-runtime-validation.md
 docs/04-evidence/lab-full-min-web-was-db-integrated-validation.md
 docs/04-evidence/lab-full-min-continuous-operations-validation.md
@@ -310,11 +400,11 @@ docs/00-project/ops-sample-service-completion-scope.md
 | Terraform | Create and destroy temporary AWS lab environments | Not a Terraform showcase |
 | Ansible | Configure hosts and reproduce operating procedures | Not an Ansible role showcase |
 | AWS EC2 | VM-style infrastructure substrate | Not an AWS managed architecture project |
-| Nginx | WEB/reverse proxy tier | Not a web tuning-only project |
+| Nginx | WEB/reverse proxy tier; config test and rollback target | Not a web tuning-only project |
 | Spring Boot/embedded Tomcat | Runs the lightweight operated service in the WAS tier; exposes request-thread pressure evidence | Not external Tomcat/WAR administration |
 | HikariCP | Exposes WAS-side DB connection-pool pressure evidence | Not production capacity sizing |
 | PostgreSQL | DB tier for work-order/event/audit/file metadata and pg_stat_activity checks | Not HA database engineering |
-| NFS | File storage tier for evidence file objects | Not storage product evaluation |
+| NFS | File storage tier for evidence file objects; mount failure and recovery target | Not storage product evaluation |
 | pg_dump/restic | Backup and restore tooling | Not backup product comparison |
 | node_exporter/Prometheus | Metrics evidence for diagnosis | Not a monitoring platform project |
 
@@ -329,8 +419,12 @@ I verified DB metadata and NFS file consistency with size and SHA-256 checks.
 I validated work-order and evidence-file web workflows through Nginx, WAS, PostgreSQL, and NFS.
 I tested upload-limit, latency, DB-impact, and connection-pressure scenarios as WEB/WAS operating incidents.
 I distinguished embedded Tomcat thread pressure from HikariCP pool exhaustion using HTTP timing/status, Nginx logs, app journald, HikariCP state, and PostgreSQL pg_stat_activity.
+I validated a bad WAS artifact rollback using systemd, health, version, readiness, and DB-backed summary checks.
+I validated an app-side NFS mount failure and recovery by separating DB-backed work-order behavior from file-storage-dependent evidence-file behavior.
+I validated Nginx bad config rejection with nginx -t and restored a known-good config before reloading the WEB tier.
 I created backup artifacts and then proved recovery in a separate restore-lab environment.
 I used logs, service state, request-path responses, and Prometheus metrics to narrow a DB service incident.
+I destroyed the temporary AWS lab after collecting evidence.
 ```
 
 Service implementation claims:
@@ -366,11 +460,14 @@ production load testing
 capacity sizing
 external Tomcat/WAR operation
 RPO/RTO guarantee
+blue-green/canary deployment
+zero-downtime release guarantee
+production storage HA
 ```
 
 ## Project hardening focus
 
-This project is not complete just because runtime validation succeeded.
+Runtime validation is now closed by default.
 
 Further work should focus on:
 
@@ -379,7 +476,7 @@ evidence-index quality
 incident report layer
 interview explanation notes
 portfolio submission wording
-one optional VM/systemd deployment rollback scenario if justified
+README polish
 ```
 
 Further work should not focus on:
