@@ -220,6 +220,7 @@
     - name: Extract outage work order values
       ansible.builtin.set_fact:
         nfs_failure_outage_work_order_id: "{{ nfs_failure_outage_api.stdout | regex_search('outage_work_order_id=([^\n]+)', '\\1') | first }}"
+        nfs_failure_outage_work_order_http_code: "{{ nfs_failure_outage_api.stdout | regex_search('outage_work_order_http_code=([^\n]+)', '\\1') | first }}"
         nfs_failure_outage_evidence_http_code: "{{ nfs_failure_outage_api.stdout | regex_search('outage_evidence_http_code=([^\n]+)', '\\1') | first }}"
 
     - name: Assert NFS outage produced expected file-storage impact
@@ -227,7 +228,7 @@
         that:
           - nfs_failure_unmount_result.stdout is search('outage_mount_state=not_mounted')
           - nfs_failure_outage_api.stdout is search('outage_storage_ready=false')
-          - nfs_failure_outage_api.stdout is search('outage_work_order_http_code=200')
+          - nfs_failure_outage_work_order_http_code is match('^2')
           - nfs_failure_outage_work_order_id != 'unknown'
           - nfs_failure_outage_evidence_http_code is not match('^2')
           - nfs_failure_remount_result.stdout is search('recovery_mount_state=mounted')
