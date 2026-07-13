@@ -10,6 +10,8 @@
       {{ ops_app_jar_source_path if (ops_app_jar_source_path | default('') | length > 0) else default_ops_app_jar_source_path }}
     ops_app_uses_remote_artifact: "{{ ops_app_jar_url | default('') | length > 0 }}"
     effective_ops_evidence_file_root: "{{ ops_evidence_file_root | default('/mnt/ops-sample/files') }}"
+    effective_ops_artifact_source: >-
+      {{ ops_app_jar_url if ops_app_uses_remote_artifact | bool else effective_ops_app_jar_source_path }}
 
   pre_tasks:
     - name: Assert DB password is supplied outside the repository
@@ -34,6 +36,7 @@
     - name: Check local jar artifact when no remote artifact URL is supplied
       ansible.builtin.stat:
         path: "{{ effective_ops_app_jar_source_path }}"
+        checksum_algorithm: sha256
       delegate_to: localhost
       become: false
       register: local_ops_app_jar
@@ -141,6 +144,12 @@
       when: not ops_app_uses_remote_artifact | bool
       notify: Restart ops-sample-service
 
+    - name: Collect deployed jar checksum
+      ansible.builtin.stat:
+        path: "{{ ops_app_jar_dest }}"
+        checksum_algorithm: sha256
+      register: ops_app_deployed_jar_stat
+
     - name: Write app environment file
       ansible.builtin.copy:
         dest: "{{ ops_app_config_dir }}/ops-sample-service.env"
@@ -157,6 +166,11 @@
           OPS_ENVIRONMENT={{ ops_app_environment }}
           OPS_EVIDENCE_FILE_ROOT={{ effective_ops_evidence_file_root }}
           APP_VERSION={{ ops_app_version }}
+          OPS_DEPLOYMENT_ID={{ ops_app_deployment_id | default(ops_app_environment ~ '-' ~ ops_app_version ~ '-' ~ ansible_date_time.epoch) }}
+          OPS_DEPLOYMENT_SLOT={{ ops_app_deployment_slot | default('stable') }}
+          OPS_DEPLOYED_AT={{ ops_app_deployed_at | default(ansible_date_time.iso8601) }}
+          OPS_ARTIFACT_SOURCE={{ effective_ops_artifact_source }}
+          OPS_ARTIFACT_SHA256={{ ops_app_deployed_jar_stat.stat.checksum | default('unknown') }}
       no_log: true
       notify: Restart ops-sample-service
 
@@ -195,6 +209,11 @@
     - name: Check app node identity
       ansible.builtin.command: "curl -fsS {{ ops_app_node_url }}"
       register: ops_app_node_check
+      changed_when: false
+
+    - name: Check app release version metadata
+      ansible.builtin.command: "curl -fsS {{ ops_app_version_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/version') }}"
+      register: ops_app_version_check
       changed_when: false
 
     - name: Check app DB-dependent readiness
@@ -245,14 +264,20 @@
           service_state={{ ops_app_service_state.stdout | default('n/a') }}
           app_port={{ ops_app_port }}
           app_version={{ ops_app_version }}
+          deployment_id={{ ops_app_deployment_id | default('n/a') }}
+          deployment_slot={{ ops_app_deployment_slot | default('stable') }}
+          deployed_at={{ ops_app_deployed_at | default(ansible_date_time.iso8601) }}
+          artifact_sha256={{ ops_app_deployed_jar_stat.stat.checksum | default('unknown') }}
+          artifact_source={{ effective_ops_artifact_source }}
           db_host={{ ops_db_host }}
           db_name={{ ops_db_name }}
           db_user={{ ops_db_user }}
           evidence_file_root={{ effective_ops_evidence_file_root }}
           evidence_root_check_rc={{ ops_app_evidence_root_check.rc | default('not-run') }}
-          artifact_source={{ ops_app_jar_url if ops_app_uses_remote_artifact | bool else effective_ops_app_jar_source_path }}
           artifact_required_entries={{ ops_app_required_jar_entries | default([]) | join(',') }}
           healthcheck_rc={{ ops_app_healthcheck.rc | default('n/a') }}
+          node_check_rc={{ ops_app_node_check.rc | default('n/a') }}
+          version_check_rc={{ ops_app_version_check.rc | default('n/a') }}
           readycheck_rc={{ ops_app_readycheck.rc | default('n/a') }}
           work_orders_summary_rc={{ ops_app_work_orders_summary_check.rc | default('n/a') }}
 
