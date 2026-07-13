@@ -17,6 +17,9 @@ ops_app_version: "0.1.0"
 ops_app_environment: lab-full-min
 ops_app_node_role: app
 ops_app_node_tier: private-was
+ops_app_deployment_id: "{{ ops_app_environment }}-{{ ops_app_version }}-{{ ansible_date_time.epoch | default('manual') }}"
+ops_app_deployment_slot: stable
+ops_app_deployed_at: "{{ ansible_date_time.iso8601 | default('manual') }}"
 
 # Either provide a downloadable artifact URL or build the jar locally and copy it.
 # When empty, the playbook uses the local repo path under apps/ops-sample-service/target/.
@@ -41,6 +44,7 @@ ops_app_expect_db_ready: true
 ops_app_healthcheck_url: "http://127.0.0.1:{{ ops_app_port }}/healthz"
 ops_app_readycheck_url: "http://127.0.0.1:{{ ops_app_port }}/readyz"
 ops_app_node_url: "http://127.0.0.1:{{ ops_app_port }}/node"
+ops_app_version_url: "http://127.0.0.1:{{ ops_app_port }}/version"
 ops_app_work_orders_summary_url: "http://127.0.0.1:{{ ops_app_port }}/api/work-orders/summary"
 
 ops_app_report_dir: /tmp/multitier-ops-platform
