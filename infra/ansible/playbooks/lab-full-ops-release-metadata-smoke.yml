@@ -1,0 +1,131 @@
+---
+- name: Validate ops-sample-service release metadata endpoint
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    release_metadata_report_dir: "{{ ops_app_report_dir | default('/tmp/multitier-ops-platform') }}"
+    release_metadata_report_file: "{{ release_metadata_report_dir }}/lab-full-ops-release-metadata-{{ inventory_hostname }}.txt"
+    release_metadata_version_url: "{{ ops_app_version_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/version') }}"
+    release_metadata_expected_service: ops-sample-service
+    release_metadata_expected_environment: "{{ ops_app_environment | default('lab-full-ops') }}"
+    release_metadata_expected_version: "{{ ops_app_version | default('0.1.0') }}"
+    release_metadata_expected_deployment_id: "{{ ops_app_deployment_id | default('baseline') }}"
+    release_metadata_expected_deployment_slot: "{{ ops_app_deployment_slot | default('current') }}"
+    release_metadata_expected_artifact_sha256: "{{ ops_app_artifact_sha256 | default('unknown') }}"
+    release_metadata_expect_build_info: true
+
+  tasks:
+    - name: Ensure ops-sample-service is active before metadata validation
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: release_metadata_service_state
+      changed_when: false
+
+    - name: Request release metadata from local WAS node
+      ansible.builtin.uri:
+        url: "{{ release_metadata_version_url }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: release_metadata_response
+
+    - name: Assert release metadata top-level structure
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.service == release_metadata_expected_service
+          - release_metadata_response.json.runtime is mapping
+          - release_metadata_response.json.build is mapping
+          - release_metadata_response.json.artifact is mapping
+          - release_metadata_response.json.deployment is mapping
+          - release_metadata_response.json.node is mapping
+        fail_msg: "Release metadata response is missing required top-level sections."
+
+    - name: Assert runtime metadata matches expected deployment context
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.runtime.appVersion == release_metadata_expected_version
+          - release_metadata_response.json.runtime.environment == release_metadata_expected_environment
+          - release_metadata_response.json.runtime.role == ops_app_node_role | default('app')
+          - release_metadata_response.json.runtime.tier == ops_app_node_tier | default('private-was')
+        fail_msg: "Release runtime metadata does not match the expected app deployment context."
+
+    - name: Assert deployment metadata is visible to the operator
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.deployment.id == release_metadata_expected_deployment_id
+          - release_metadata_response.json.deployment.slot == release_metadata_expected_deployment_slot
+          - release_metadata_response.json.deployment.deployedAt is string
+          - release_metadata_response.json.deployment.deployedAt | length > 0
+        fail_msg: "Deployment metadata is missing or does not match expected values."
+
+    - name: Assert artifact metadata is visible to the operator
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.artifact.source is string
+          - release_metadata_response.json.artifact.source | length > 0
+          - release_metadata_response.json.artifact.sha256 is string
+          - release_metadata_response.json.artifact.sha256 | length > 0
+        fail_msg: "Artifact metadata is missing from /version response."
+
+    - name: Assert artifact checksum if an expected checksum was supplied
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.artifact.sha256 == release_metadata_expected_artifact_sha256
+        fail_msg: "Artifact checksum in /version does not match the expected value."
+      when: release_metadata_expected_artifact_sha256 != 'unknown'
+
+    - name: Assert build metadata if enabled
+      ansible.builtin.assert:
+        that:
+          - release_metadata_response.json.build.available | bool
+          - release_metadata_response.json.build.name == release_metadata_expected_service
+          - release_metadata_response.json.build.version is string
+          - release_metadata_response.json.build.version | length > 0
+          - release_metadata_response.json.build.time is string
+          - release_metadata_response.json.build.time | length > 0
+        fail_msg: "Build metadata is not available from the running artifact."
+      when: release_metadata_expect_build_info | bool
+
+    - name: Ensure release metadata report directory exists
+      ansible.builtin.file:
+        path: "{{ release_metadata_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write release metadata validation report
+      ansible.builtin.copy:
+        dest: "{{ release_metadata_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default(release_metadata_expected_environment) }}
+          inventory_hostname={{ inventory_hostname }}
+          service_state={{ release_metadata_service_state.stdout | default('n/a') }}
+          version_url={{ release_metadata_version_url }}
+          service={{ release_metadata_response.json.service | default('n/a') }}
+          runtime_app_version={{ release_metadata_response.json.runtime.appVersion | default('n/a') }}
+          runtime_environment={{ release_metadata_response.json.runtime.environment | default('n/a') }}
+          runtime_role={{ release_metadata_response.json.runtime.role | default('n/a') }}
+          runtime_tier={{ release_metadata_response.json.runtime.tier | default('n/a') }}
+          build_available={{ release_metadata_response.json.build.available | default('n/a') }}
+          build_name={{ release_metadata_response.json.build.name | default('n/a') }}
+          build_version={{ release_metadata_response.json.build.version | default('n/a') }}
+          build_time={{ release_metadata_response.json.build.time | default('n/a') }}
+          artifact_source={{ release_metadata_response.json.artifact.source | default('n/a') }}
+          artifact_sha256={{ release_metadata_response.json.artifact.sha256 | default('n/a') }}
+          deployment_id={{ release_metadata_response.json.deployment.id | default('n/a') }}
+          deployment_slot={{ release_metadata_response.json.deployment.slot | default('n/a') }}
+          deployment_deployed_at={{ release_metadata_response.json.deployment.deployedAt | default('n/a') }}
+          node_hostname={{ release_metadata_response.json.node.hostname | default('n/a') }}
+          release_metadata_status=validated
+
+    - name: Display release metadata validation report
+      ansible.builtin.command: "cat {{ release_metadata_report_file }}"
+      register: release_metadata_report
+      changed_when: false
+
+    - name: Show release metadata validation report
+      ansible.builtin.debug:
+        var: release_metadata_report.stdout_lines
