@@ -51,11 +51,11 @@ Run the scenario as a controlled validation window:
 ```text
 1. Deploy bounded pressure profile
 2. Run connection pressure validation
-3. Archive evidence
+3. Fetch and archive evidence
 4. Restore normal app runtime profile
 ```
 
-The restore step is part of the operating procedure. Do not leave `ops-sample-service` running with the bounded pressure profile after evidence collection.
+The archive step must run before restoring or destroying anything. The restore step is part of the operating procedure. Do not leave `ops-sample-service` running with the bounded pressure profile after evidence collection.
 
 ## Step 1. Deploy bounded pressure profile
 
@@ -126,9 +126,7 @@ ansible-playbook -i inventories/lab-full-ops/hosts.yml \
   -e 'connection_pressure_db_hold_seconds=10'
 ```
 
-## Step 3. Archive evidence
-
-The playbook writes files under:
+The validation playbook writes runtime files under:
 
 ```text
 /tmp/multitier-ops-platform/lab-full-ops-connection-pressure/
@@ -140,7 +138,32 @@ Main report:
 /tmp/multitier-ops-platform/lab-full-ops-connection-pressure-nginx-01.txt
 ```
 
-Before restoring or destroying anything, copy the report and result directory into the local evidence archive for the validation window.
+## Step 3. Fetch and archive evidence
+
+Before restoring or destroying anything, archive and fetch the report and result directory from `nginx-01`:
+
+```bash
+ansible-playbook -i inventories/lab-full-ops/hosts.yml \
+  playbooks/lab-full-ops-connection-pressure-fetch-evidence.yml
+```
+
+The fetch playbook creates a remote tarball and checksum under `/tmp/multitier-ops-platform`, then copies them to the Ansible control node.
+
+Default local destination:
+
+```text
+/tmp/multitier-ops-platform-evidence/connection-pressure/
+```
+
+To override the local archive directory:
+
+```bash
+CONNECTION_PRESSURE_EVIDENCE_DIR=/mnt/c/Project/test/multitier-ops-platform-evidence/connection-pressure \
+ansible-playbook -i inventories/lab-full-ops/hosts.yml \
+  playbooks/lab-full-ops-connection-pressure-fetch-evidence.yml
+```
+
+Do not commit the fetched tarball or raw runtime JSON/log files to the repository. Use them as source evidence when writing the final evidence summary and incident report.
 
 ## Step 4. Restore normal app runtime profile
 
@@ -191,6 +214,7 @@ Cross-tier evidence:
 - Nginx access log lines with request IDs
 - app journald lines with request IDs
 - PostgreSQL pg_stat_activity sample during DB pressure
+- fetched tar.gz archive and sha256 checksum
 ```
 
 ## Supported claim
@@ -231,7 +255,7 @@ This scenario is complete when the report contains:
 9. PostgreSQL pg_stat_activity sample during DB pressure
 10. Nginx request-id log sample
 11. app journald request-id log sample
-12. evidence archived before cleanup
+12. evidence tarball and checksum fetched to local archive directory
 13. app runtime restored to stable/default profile
 ```
 
