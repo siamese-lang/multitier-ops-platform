@@ -77,6 +77,14 @@ ops_db_url: "jdbc:postgresql://{{ ops_db_host }}:{{ ops_db_port }}/{{ ops_db_nam
 # ansible-playbook ... -e 'ops_db_password=<strong-local-password>'
 ops_db_password: ""
 
+# HikariCP defaults used by the connection pressure workload.
+# Scenario playbooks may override these to create bounded pool pressure.
+ops_hikari_max_pool_size: 10
+ops_hikari_min_idle: 1
+ops_hikari_connection_timeout_ms: 30000
+ops_hikari_idle_timeout_ms: 600000
+ops_hikari_max_lifetime_ms: 1800000
+
 # Evidence-file path used by the work-order evidence flow.
 # This must match the app-side NFS mount path prepared by
 # lab-full-ops-app-nfs-mount-baseline.yml.
