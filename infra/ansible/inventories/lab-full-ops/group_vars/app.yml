@@ -48,6 +48,13 @@ ops_app_deployment_id: "{{ ops_app_environment }}-{{ ops_app_version }}-{{ ansib
 ops_app_deployment_slot: stable
 ops_app_deployed_at: "{{ ansible_date_time.iso8601 | default('manual') }}"
 
+# Embedded Tomcat defaults used by the WAS thread pressure workload.
+# Scenario playbooks may override these to create bounded request-thread pressure.
+ops_tomcat_threads_max: 200
+ops_tomcat_threads_min_spare: 10
+ops_tomcat_accept_count: 100
+ops_tomcat_connection_timeout: 20s
+
 # Either provide a downloadable artifact URL or provide a local jar under
 # apps/ops-sample-service/target/. GitHub Actions artifacts can be downloaded
 # manually and placed there when Maven is not installed locally.
