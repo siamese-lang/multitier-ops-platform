@@ -57,22 +57,18 @@ Do not run Terraform from WSL. Do not run Ansible from Git Bash.
 
 ```text
 README.md
-apps/ops-sample-service/README.md
-apps/ops-sample-service/FAILURE_LAB.md
 docs/00-project/project-scope.md
 docs/00-project/roadmap.md
+docs/00-project/current-state-after-enhanced-runtime-validation.md
 docs/00-project/workload-strategy.md
 docs/00-project/ops-sample-service-completion-scope.md
 docs/00-project/enhanced-service-operations-scenarios.md
 docs/00-project/portfolio-summary.md
 docs/00-project/interview-explanation-notes.md
 docs/00-project/next-chat-handoff.md
-docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
-docs/03-runbooks/lab-full-ops-enhanced-upload-limit-incident.md
-docs/03-runbooks/lab-full-ops-enhanced-latency-scenario.md
-docs/03-runbooks/lab-full-ops-enhanced-db-web-impact-incident.md
-docs/03-runbooks/restore-lab-enhanced-service-validation.md
 docs/04-evidence/evidence-index.md
+apps/ops-sample-service/README.md
+apps/ops-sample-service/FAILURE_LAB.md
 ```
 
 For detailed runtime evidence, read the referenced documents in `docs/04-evidence/`.
@@ -84,31 +80,39 @@ Phase 0. lab-runtime smoke test: completed
 Phase 1. lab-full-min WEB/WAS/DB minimum environment: completed
 Phase 2A. lab-full-ops storage validation: completed
 Phase 2B. lab-full-ops backup artifact creation: completed as backup-artifact evidence
-Phase 3. restore-lab DB/file/API recovery validation: completed for the earlier workload model
+Phase 3. restore-lab DB/file/API recovery validation: completed
 Phase 4A. observability logs/service/request-path evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
+Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
 ```
 
-## Current service implementation and validation-prep state
-
-The service implementation baseline is complete in repository code:
+Enhanced validation scope completed:
 
 ```text
-Phase 5A. work-order domain/schema: implemented
-Phase 5B. server-rendered work-order web workflow: implemented
-Phase 5C. evidence upload/download workflow: implemented
-Phase 5D. WEB/WAS failure-lab endpoints: implemented
-Phase 5E. enhanced service workflow validation playbook: statically prepared
-Phase 5F. enhanced service operations scenario matrix: defined
-Phase 5G. upload failure and upload-limit incident validation playbook: statically prepared
-Phase 5H. WAS sleep vs DB sleep latency scenario validation playbook: statically prepared
-Phase 5I. DB service incident web-impact validation playbook: statically prepared
-Phase 5J. enhanced restore-lab service validation playbook: statically prepared
+S1 enhanced service workflow validation: completed
+S2 upload-limit incident validation: completed
+S3 latency scenario validation: completed
+S4 DB web-impact incident validation: completed
+Backup baseline: completed
+Restore-lab DB/file restore baseline: completed
+Restore-lab HTTP/API consistency validation: completed
+Source lab destroy: completed
+Restore lab destroy: completed
 ```
 
-Implemented service capabilities:
+Key state document:
+
+```text
+docs/00-project/current-state-after-enhanced-runtime-validation.md
+```
+
+## Current service state
+
+`ops-sample-service` is implemented as a lightweight web service for operations work orders and evidence files.
+
+Implemented capabilities:
 
 ```text
 work-order list/detail/create/status-change pages
@@ -118,23 +122,7 @@ PostgreSQL metadata + file storage object consistency path
 failure-lab: sleep, db-sleep, file-storage-check, upload-limits
 ```
 
-Validation prep and scenario planning added:
-
-```text
-infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
-docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
-infra/ansible/playbooks/lab-full-ops-enhanced-upload-limit-incident.yml
-docs/03-runbooks/lab-full-ops-enhanced-upload-limit-incident.md
-infra/ansible/playbooks/lab-full-ops-enhanced-latency-scenario.yml
-docs/03-runbooks/lab-full-ops-enhanced-latency-scenario.md
-infra/ansible/playbooks/lab-full-ops-enhanced-db-web-impact-incident.yml
-docs/03-runbooks/lab-full-ops-enhanced-db-web-impact-incident.md
-infra/ansible/playbooks/restore-lab-enhanced-service-validation.yml
-docs/03-runbooks/restore-lab-enhanced-service-validation.md
-docs/00-project/enhanced-service-operations-scenarios.md
-```
-
-The service can now answer this interview question without defensive wording:
+The service can answer this interview question:
 
 ```text
 What service did you operate?
@@ -149,28 +137,9 @@ Target answer:
 Important boundary:
 
 ```text
-The enhanced service implementation, scenario matrix, baseline validation playbook, incident playbooks, and enhanced restore-lab validation playbook are complete.
-Enhanced AWS runtime evidence is not yet refreshed.
+The service is intentionally lightweight. It exists to make WEB/WAS/DB/Storage/Backup operating scenarios explainable.
+It is not a commercial ITSM clone or production service.
 ```
-
-## Phase 4 freeze remains valid
-
-Phase 4 observability expansion is frozen.
-
-Do not continue with:
-
-```text
-Grafana dashboard-first work
-Alertmanager notification maturity
-Loki expansion
-blackbox exporter expansion
-additional Prometheus feature work
-PostgreSQL HA/failover
-Kubernetes/EKS/GitOps
-new AWS runtime windows by default
-```
-
-The next work should focus on one planned enhanced-service runtime validation window, not more app features or observability expansion.
 
 ## Validated claims
 
@@ -180,39 +149,16 @@ The repository can currently support these runtime evidence claims:
 EC2-based WEB/WAS/DB/Storage/Backup/Observability tiers were separated and configured.
 WEB/WAS/DB normal and failure paths were validated with evidence.
 DB metadata and NFS file object consistency were validated with size and SHA-256 evidence.
-Backup artifacts were created and then restored in a separate restore-lab environment for the earlier workload model.
+Backup artifacts were created and then restored in a separate restore-lab environment.
 Logs, service state, request-path responses, and metrics were used to narrow DB service incidents.
 Prometheus metrics distinguished DB host reachability from PostgreSQL service failure.
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
+The enhanced work-order/evidence-file web workflow was validated in AWS runtime.
+Upload-limit, latency, and DB web-impact scenarios were validated against the enhanced service model.
+Restore-lab recovery was refreshed against the enhanced service model.
 ```
 
-The repository can currently support these implementation and prep claims:
-
-```text
-ops-sample-service includes a lightweight web workflow for operations work orders and evidence files.
-The service includes work-order pages, status history, audit logs, evidence upload/download, and failure-lab endpoints.
-The enhanced service workflow validation playbook is prepared, but not yet runtime-validated.
-The upload failure and upload-limit incident validation playbook is prepared, but not yet runtime-validated.
-The latency scenario validation playbook is prepared, but not yet runtime-validated.
-The DB web-impact incident validation playbook is prepared, but not yet runtime-validated.
-The enhanced restore-lab service validation playbook is prepared, but not yet runtime-validated.
-The enhanced service operations scenario matrix is defined, but incident-specific runtime evidence is not yet collected.
-```
-
-## Claims not yet supported by refreshed runtime evidence
-
-Do not claim yet:
-
-```text
-The enhanced web workflow has been runtime-validated through AWS/Nginx/WAS.
-The evidence upload/download workflow has been runtime-validated through Nginx/WAS/NFS/PostgreSQL.
-Upload failure isolation has been validated across Nginx/WAS/NFS/PostgreSQL.
-The failure-lab sleep/db-sleep scenarios have been validated with logs and metrics.
-The DB service incident has been validated against the enhanced web workflow.
-The restore-lab recovery has been refreshed against the enhanced service model.
-```
-
-## Not supported claims
+## Claims not supported
 
 Do not claim:
 
@@ -228,6 +174,8 @@ SLO/SLA compliance
 Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
 commercial ITSM implementation
+production disaster recovery
+RPO/RTO guarantee
 ```
 
 ## Runtime policy
@@ -240,57 +188,77 @@ Current default:
 No new AWS runtime by default.
 No more observability feature expansion.
 No more Prometheus/Grafana/Alertmanager expansion.
+Documentation and portfolio hardening first.
 ```
 
-For enhanced service validation, use one planned validation window:
+If a future runtime validation is justified, use one planned validation window:
 
 ```text
 prepare statically -> apply once -> configure -> validate -> collect evidence -> destroy once
 ```
 
-## Recommended next tasks
+## Current next tasks
 
-The static prep is now complete enough to run one planned runtime window:
+The next phase is portfolio hardening, not project shutdown.
 
-```text
-[VALIDATION] Run one planned enhanced-service AWS validation window
-[VALIDATION] Document enhanced-service runtime evidence
-[DOCS] Update evidence index after enhanced-service validation
-[DOCS] Update portfolio/interview/submission notes after validated evidence
-```
-
-The scenario matrix is the planning source of truth:
+Recommended next tasks:
 
 ```text
-docs/00-project/enhanced-service-operations-scenarios.md
+[DOCS] Harden evidence-index claim mapping
+[DOCS] Add incident reports for enhanced operating scenarios
+[DOCS] Update interview explanation notes after enhanced validation
+[DOCS] Improve portfolio summary for infrastructure / WEB-WAS operations interviews
+[VALIDATION] Plan one VM/systemd deployment rollback scenario only if needed
 ```
 
-Avoid app feature expansion unless validation exposes a concrete defect.
+Suggested incident report documents:
+
+```text
+docs/05-incident-reports/upload-limit-incident-report.md
+docs/05-incident-reports/latency-diagnosis-incident-report.md
+docs/05-incident-reports/db-web-impact-incident-report.md
+docs/05-incident-reports/restore-lab-recovery-incident-report.md
+```
+
+Each incident report should use this structure:
+
+```text
+Scenario
+User-visible symptom
+Impact scope
+Initial hypotheses
+Layer-by-layer checks
+Observed evidence
+Root-cause judgment
+Action taken
+Recovery validation
+Remaining limits
+Interview explanation points
+```
+
+## Optional future validation
+
+If one more runtime window is worth the cost, prioritize:
+
+```text
+VM/systemd app deployment and rollback scenario
+```
+
+Avoid:
+
+```text
+EKS/GitOps migration
+ALB/RDS redesign
+Blue/Green overengineering
+Grafana dashboard work
+Alertmanager routing work
+unrelated architecture expansion
+```
 
 ## Prompt to start the next chat
 
 ```text
 We are continuing the GitHub project `siamese-lang/multitier-ops-platform`.
-
-Before doing any work, read these repository documents and treat them as the source of truth:
-
-- README.md
-- apps/ops-sample-service/README.md
-- apps/ops-sample-service/FAILURE_LAB.md
-- docs/00-project/project-scope.md
-- docs/00-project/roadmap.md
-- docs/00-project/workload-strategy.md
-- docs/00-project/ops-sample-service-completion-scope.md
-- docs/00-project/enhanced-service-operations-scenarios.md
-- docs/00-project/portfolio-summary.md
-- docs/00-project/interview-explanation-notes.md
-- docs/00-project/next-chat-handoff.md
-- docs/03-runbooks/lab-full-ops-enhanced-service-workflow-validation.md
-- docs/03-runbooks/lab-full-ops-enhanced-upload-limit-incident.md
-- docs/03-runbooks/lab-full-ops-enhanced-latency-scenario.md
-- docs/03-runbooks/lab-full-ops-enhanced-db-web-impact-incident.md
-- docs/03-runbooks/restore-lab-enhanced-service-validation.md
-- docs/04-evidence/evidence-index.md
 
 The fixed project theme is:
 
@@ -298,28 +266,19 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 
 This is not an OpenKoda installation project, not a Terraform showcase, not a Spring Boot sample app project, not Kubernetes/EKS/GitOps work, not a Grafana dashboard-first project, and not a Prometheus-only monitoring practice. It is a VM-based operations portfolio focused on WEB/WAS/DB/Storage/Backup/Observability tier separation, failure diagnosis, and recovery validation.
 
-Current completed runtime evidence state:
-- Phase 0 lab-runtime smoke test completed.
-- Phase 1 lab-full-min WEB/WAS/DB completed.
-- Phase 2A lab-full-ops storage validation completed.
-- Phase 2B backup artifact creation completed as backup-artifact evidence.
-- Phase 3 restore-lab DB/file/API recovery validation completed for the earlier workload model.
-- Phase 4A logs/service/request-path observability evidence completed.
-- Phase 4B node_exporter + Prometheus scrape metrics evidence completed.
-- Phase 4C metric-based DB service incident diagnosis completed.
-- Phase 4D Prometheus DB service alert-rule evaluation evidence completed.
+Before doing work, read:
+- README.md
+- docs/00-project/project-scope.md
+- docs/00-project/roadmap.md
+- docs/00-project/current-state-after-enhanced-runtime-validation.md
+- docs/00-project/portfolio-summary.md
+- docs/00-project/interview-explanation-notes.md
+- docs/00-project/next-chat-handoff.md
+- docs/04-evidence/evidence-index.md
+- apps/ops-sample-service/README.md
+- apps/ops-sample-service/FAILURE_LAB.md
 
-Current service implementation and validation-prep state:
-- `ops-sample-service` is now implemented as a lightweight web service for operations work orders and evidence files.
-- It includes work-order list/detail/create/status-change pages, status history, audit logs, evidence upload/download, DB/file consistency paths, and WEB/WAS failure-lab endpoints.
-- Enhanced workflow validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-service-workflow-validation.yml`.
-- Upload failure isolation validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-upload-limit-incident.yml`.
-- WAS sleep vs DB sleep latency validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-latency-scenario.yml`.
-- DB web-impact validation is statically prepared in `infra/ansible/playbooks/lab-full-ops-enhanced-db-web-impact-incident.yml`.
-- Enhanced restore-lab validation is statically prepared in `infra/ansible/playbooks/restore-lab-enhanced-service-validation.yml`.
-- Enhanced service operations scenarios are defined in `docs/00-project/enhanced-service-operations-scenarios.md`.
+Current completed evidence includes Phase 0-4, enhanced service validation S1-S4, backup baseline, restore-lab DB/file restore baseline, restore-lab HTTP/API consistency validation, and both source/restore lab destroy.
 
-Phase 4 observability expansion is frozen. Do not create new AWS runtime by default. Do not add more Prometheus/Grafana/Alertmanager features by default.
-
-Current priority is one planned AWS validation window. The sequence should be: apply once, configure DB/NFS/app/Nginx, run enhanced workflow validation, run upload failure incident validation, run latency scenario validation, run DB web-impact incident validation, create backup artifacts, deploy restore-lab, restore DB/file artifacts, run enhanced restore-lab validation, collect evidence, document results, and destroy once.
+Do not open AWS runtime by default. The next task is portfolio hardening: evidence-index, incident reports, interview notes, and claim-boundary cleanup.
 ```
