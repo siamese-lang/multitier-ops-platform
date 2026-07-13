@@ -1,0 +1,276 @@
+---
+- name: Validate controlled bad deployment and rollback path
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    bad_deploy_report_dir: "{{ ops_app_report_dir | default('/tmp/multitier-ops-platform') }}"
+    bad_deploy_report_file: "{{ bad_deploy_report_dir }}/lab-full-ops-bad-deployment-rollback-{{ inventory_hostname }}.txt"
+    bad_deploy_backup_dir: "{{ ops_app_home }}/releases"
+    bad_deploy_previous_jar_backup: "{{ bad_deploy_backup_dir }}/ops-sample-service.jar.before-bad-deploy-{{ ansible_date_time.epoch }}"
+    bad_deploy_previous_env_backup: "{{ bad_deploy_backup_dir }}/ops-sample-service.env.before-bad-deploy-{{ ansible_date_time.epoch }}"
+    bad_deploy_env_file: "{{ ops_app_config_dir }}/ops-sample-service.env"
+    bad_deploy_version_url: "{{ ops_app_version_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/version') }}"
+    bad_deploy_marker_version: "bad-deploy-{{ ansible_date_time.epoch }}"
+    bad_deploy_marker_id: "bad-artifact-{{ ansible_date_time.epoch }}"
+    bad_deploy_invalid_jar_content: |
+      This is an intentionally invalid jar used for a controlled VM/systemd rollback validation.
+      It must never be used as a real service artifact.
+
+  tasks:
+    - name: Ensure rollback backup directory exists
+      ansible.builtin.file:
+        path: "{{ bad_deploy_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Capture baseline service state
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: bad_deploy_baseline_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Capture baseline version metadata
+      ansible.builtin.command: "curl -fsS {{ bad_deploy_version_url }}"
+      register: bad_deploy_baseline_version
+      changed_when: false
+      failed_when: false
+
+    - name: Check current jar exists before bad deployment
+      ansible.builtin.stat:
+        path: "{{ ops_app_jar_dest }}"
+        checksum_algorithm: sha256
+      register: bad_deploy_current_jar_stat
+
+    - name: Assert current jar exists before bad deployment
+      ansible.builtin.assert:
+        that:
+          - bad_deploy_current_jar_stat.stat.exists
+        fail_msg: "Current app jar was not found at {{ ops_app_jar_dest }}. Run the app deployment baseline first."
+
+    - name: Back up current jar before bad deployment
+      ansible.builtin.copy:
+        src: "{{ ops_app_jar_dest }}"
+        dest: "{{ bad_deploy_previous_jar_backup }}"
+        remote_src: true
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+
+    - name: Check current environment file exists before bad deployment
+      ansible.builtin.stat:
+        path: "{{ bad_deploy_env_file }}"
+      register: bad_deploy_current_env_stat
+
+    - name: Assert current environment file exists before bad deployment
+      ansible.builtin.assert:
+        that:
+          - bad_deploy_current_env_stat.stat.exists
+        fail_msg: "Environment file was not found at {{ bad_deploy_env_file }}. Run the app deployment baseline first."
+
+    - name: Back up current environment file before bad deployment
+      ansible.builtin.copy:
+        src: "{{ bad_deploy_env_file }}"
+        dest: "{{ bad_deploy_previous_env_backup }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Write intentionally invalid jar to service path
+      ansible.builtin.copy:
+        dest: "{{ ops_app_jar_dest }}"
+        content: "{{ bad_deploy_invalid_jar_content }}"
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+
+    - name: Collect intentionally invalid jar checksum
+      ansible.builtin.stat:
+        path: "{{ ops_app_jar_dest }}"
+        checksum_algorithm: sha256
+      register: bad_deploy_invalid_jar_stat
+
+    - name: Mark environment as bad deployment candidate
+      ansible.builtin.lineinfile:
+        path: "{{ bad_deploy_env_file }}"
+        regexp: "^APP_VERSION="
+        line: "APP_VERSION={{ bad_deploy_marker_version }}"
+        create: false
+      no_log: true
+
+    - name: Mark bad deployment id
+      ansible.builtin.lineinfile:
+        path: "{{ bad_deploy_env_file }}"
+        regexp: "^OPS_DEPLOYMENT_ID="
+        line: "OPS_DEPLOYMENT_ID={{ bad_deploy_marker_id }}"
+        insertafter: EOF
+        create: false
+      no_log: true
+
+    - name: Mark bad deployment slot
+      ansible.builtin.lineinfile:
+        path: "{{ bad_deploy_env_file }}"
+        regexp: "^OPS_DEPLOYMENT_SLOT="
+        line: "OPS_DEPLOYMENT_SLOT=bad-candidate"
+        insertafter: EOF
+        create: false
+      no_log: true
+
+    - name: Mark bad deployment artifact checksum
+      ansible.builtin.lineinfile:
+        path: "{{ bad_deploy_env_file }}"
+        regexp: "^OPS_ARTIFACT_SHA256="
+        line: "OPS_ARTIFACT_SHA256={{ bad_deploy_invalid_jar_stat.stat.checksum | default('unknown') }}"
+        insertafter: EOF
+        create: false
+      no_log: true
+
+    - name: Restart service with intentionally invalid jar
+      ansible.builtin.systemd:
+        name: ops-sample-service
+        state: restarted
+        daemon_reload: true
+      register: bad_deploy_restart_result
+      failed_when: false
+
+    - name: Give systemd a short window to mark failed startup
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Capture bad deployment service state
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: bad_deploy_failed_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Capture bad deployment systemd status excerpt
+      ansible.builtin.command: systemctl status ops-sample-service --no-pager
+      register: bad_deploy_systemd_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture bad deployment journal excerpt
+      ansible.builtin.command: journalctl -u ops-sample-service -n 40 --no-pager
+      register: bad_deploy_journal_excerpt
+      changed_when: false
+      failed_when: false
+
+    - name: Check health fails during bad deployment
+      ansible.builtin.command: "curl -fsS {{ ops_app_healthcheck_url }}"
+      register: bad_deploy_health_during_failure
+      changed_when: false
+      failed_when: false
+
+    - name: Assert bad deployment caused WAS startup or health failure
+      ansible.builtin.assert:
+        that:
+          - bad_deploy_failed_service_state.stdout != 'active' or bad_deploy_health_during_failure.rc != 0
+        fail_msg: >-
+          The intentionally invalid jar did not create an observable service failure.
+          Check whether systemd kept an older process alive or whether the test target is incorrect.
+
+    - name: Restore previous jar during rollback
+      ansible.builtin.copy:
+        src: "{{ bad_deploy_previous_jar_backup }}"
+        dest: "{{ ops_app_jar_dest }}"
+        remote_src: true
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+
+    - name: Restore previous environment file during rollback
+      ansible.builtin.copy:
+        src: "{{ bad_deploy_previous_env_backup }}"
+        dest: "{{ bad_deploy_env_file }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Restart service after rollback
+      ansible.builtin.systemd:
+        name: ops-sample-service
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for rollback HTTP port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ ops_app_port }}"
+        timeout: 60
+
+    - name: Validate rollback health
+      ansible.builtin.command: "curl -fsS {{ ops_app_healthcheck_url }}"
+      register: bad_deploy_rollback_health
+      changed_when: false
+
+    - name: Validate rollback version metadata
+      ansible.builtin.command: "curl -fsS {{ bad_deploy_version_url }}"
+      register: bad_deploy_rollback_version
+      changed_when: false
+
+    - name: Validate rollback readiness
+      ansible.builtin.command: "curl -fsS {{ ops_app_readycheck_url }}"
+      register: bad_deploy_rollback_ready
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and bad_deploy_rollback_ready.rc != 0
+
+    - name: Validate rollback DB-backed summary
+      ansible.builtin.command: "curl -fsS {{ ops_app_work_orders_summary_url }}"
+      register: bad_deploy_rollback_summary
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and bad_deploy_rollback_summary.rc != 0
+
+    - name: Capture final service state after rollback
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: bad_deploy_final_service_state
+      changed_when: false
+
+    - name: Ensure bad deployment rollback report directory exists
+      ansible.builtin.file:
+        path: "{{ bad_deploy_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write bad deployment rollback validation report
+      ansible.builtin.copy:
+        dest: "{{ bad_deploy_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default(ops_app_environment) }}
+          inventory_hostname={{ inventory_hostname }}
+          service_name=ops-sample-service
+          baseline_service_state={{ bad_deploy_baseline_service_state.stdout | default('n/a') }}
+          baseline_version_rc={{ bad_deploy_baseline_version.rc | default('n/a') }}
+          previous_jar={{ ops_app_jar_dest }}
+          previous_jar_backup={{ bad_deploy_previous_jar_backup }}
+          previous_jar_sha256={{ bad_deploy_current_jar_stat.stat.checksum | default('unknown') }}
+          invalid_jar_sha256={{ bad_deploy_invalid_jar_stat.stat.checksum | default('unknown') }}
+          bad_deployment_version={{ bad_deploy_marker_version }}
+          bad_deployment_id={{ bad_deploy_marker_id }}
+          bad_deploy_restart_rc={{ bad_deploy_restart_result.rc | default('n/a') }}
+          bad_deploy_service_state={{ bad_deploy_failed_service_state.stdout | default('n/a') }}
+          bad_deploy_health_rc={{ bad_deploy_health_during_failure.rc | default('n/a') }}
+          rollback_health_rc={{ bad_deploy_rollback_health.rc | default('n/a') }}
+          rollback_version_rc={{ bad_deploy_rollback_version.rc | default('n/a') }}
+          rollback_ready_rc={{ bad_deploy_rollback_ready.rc | default('n/a') }}
+          rollback_summary_rc={{ bad_deploy_rollback_summary.rc | default('n/a') }}
+          final_service_state={{ bad_deploy_final_service_state.stdout | default('n/a') }}
+          failure_layer=was-artifact-startup
+          rollback_status={{ 'validated' if bad_deploy_final_service_state.stdout == 'active' else 'check_required' }}
+
+    - name: Display bad deployment rollback validation report
+      ansible.builtin.command: "cat {{ bad_deploy_report_file }}"
+      register: bad_deploy_report
+      changed_when: false
+
+    - name: Show bad deployment rollback validation report
+      ansible.builtin.debug:
+        var: bad_deploy_report.stdout_lines
