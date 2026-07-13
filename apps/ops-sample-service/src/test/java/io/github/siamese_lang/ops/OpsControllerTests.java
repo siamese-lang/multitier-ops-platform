@@ -24,4 +24,14 @@ class OpsControllerTests {
         assertThat(response.getBody()).containsEntry("service", "ops-sample-service");
         assertThat(response.getBody()).containsKeys("runtime", "build", "artifact", "deployment", "node");
     }
+
+    @Test
+    void dbPoolEndpointReturnsPoolSettingsWithoutOpeningDbConnection() {
+        ResponseEntity<Map> response = restTemplate.getForEntity("/api/failure-lab/db-pool", Map.class);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody()).containsEntry("scenario", "db_pool");
+        assertThat(response.getBody()).containsKeys("db", "pool", "node", "durationMs");
+    }
 }
