@@ -22,7 +22,7 @@
 
 <header>
   <h1>WEB/WAS Failure Lab</h1>
-  <p class="muted">Nginx timeout, WAS thread 점유, DB dependency latency, 파일 저장소 상태를 관찰하기 위한 운영 검증용 경로입니다.</p>
+  <p class="muted">Nginx timeout, WAS thread 점유, DB dependency latency, HikariCP connection pool pressure, 파일 저장소 상태를 관찰하기 위한 운영 검증용 경로입니다.</p>
 </header>
 
 <section class="card">
@@ -40,6 +40,22 @@
     <tr><th>Readable</th><td th:text="${storage.readable}">true</td></tr>
     <tr><th>Writable</th><td th:text="${storage.writable}">true</td></tr>
     <tr><th>Ready</th><td th:text="${storage.ready}">true</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>DB connection pool</h2>
+  <table>
+    <tbody>
+    <tr><th>Initialized</th><td th:text="${dbPool.initialized}">false</td></tr>
+    <tr><th>Closed</th><td th:text="${dbPool.closed}">false</td></tr>
+    <tr><th>Maximum pool size</th><td th:text="${dbPool.settings.maximumPoolSize}">10</td></tr>
+    <tr><th>Minimum idle</th><td th:text="${dbPool.settings.minimumIdle}">1</td></tr>
+    <tr><th>Connection timeout ms</th><td th:text="${dbPool.settings.connectionTimeoutMs}">30000</td></tr>
+    <tr><th>Active connections</th><td th:text="${dbPool.activeConnections ?: 'n/a'}">n/a</td></tr>
+    <tr><th>Idle connections</th><td th:text="${dbPool.idleConnections ?: 'n/a'}">n/a</td></tr>
+    <tr><th>Threads awaiting connection</th><td th:text="${dbPool.threadsAwaitingConnection ?: 'n/a'}">n/a</td></tr>
     </tbody>
   </table>
 </section>
@@ -66,6 +82,16 @@
       <td>DB dependency latency, readiness와 DB-backed endpoint 차이, connection wait 관찰</td>
     </tr>
     <tr>
+      <td><a href="/api/failure-lab/db-hold?seconds=10"><code>/api/failure-lab/db-hold?seconds=10</code></a></td>
+      <td>HikariCP connection을 일정 시간 점유하는 connection pressure workload</td>
+      <td>HikariCP active/idle/awaiting 상태, 업무 API 지연, PostgreSQL <code>pg_stat_activity</code></td>
+    </tr>
+    <tr>
+      <td><a href="/api/failure-lab/db-pool"><code>/api/failure-lab/db-pool</code></a></td>
+      <td>현재 HikariCP 설정과 pool 상태 확인</td>
+      <td>maximumPoolSize, connectionTimeout, active/idle/awaiting connection evidence</td>
+    </tr>
+    <tr>
       <td><a href="/api/failure-lab/file-storage-check"><code>/api/failure-lab/file-storage-check</code></a></td>
       <td>NFS/app file storage mount 상태 확인</td>
       <td>파일 저장소 장애, 권한 문제, 업로드 실패 원인 분리</td>
@@ -83,6 +109,8 @@
   <h2>CLI examples</h2>
   <pre>curl -i -H 'X-Request-Id: was-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/sleep?millis=3000'
 curl -i -H 'X-Request-Id: db-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-sleep?millis=3000'
+curl -i -H 'X-Request-Id: db-hold-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-hold?seconds=10'
+curl -i -H 'X-Request-Id: db-pool-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-pool'
 curl -i -H 'X-Request-Id: file-storage-check-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/file-storage-check'
 curl -i -H 'X-Request-Id: upload-limits-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/upload-limits'</pre>
 </section>
