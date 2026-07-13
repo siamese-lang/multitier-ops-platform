@@ -14,10 +14,12 @@ public class OpsController {
 
     private final DbProbe dbProbe;
     private final NodeIdentity nodeIdentity;
+    private final ReleaseInfo releaseInfo;
 
-    public OpsController(DbProbe dbProbe, NodeIdentity nodeIdentity) {
+    public OpsController(DbProbe dbProbe, NodeIdentity nodeIdentity, ReleaseInfo releaseInfo) {
         this.dbProbe = dbProbe;
         this.nodeIdentity = nodeIdentity;
+        this.releaseInfo = releaseInfo;
     }
 
     @GetMapping("/healthz")
@@ -45,6 +47,11 @@ public class OpsController {
         Map<String, Object> response = baseResponse("up");
         response.put("node", nodeIdentity.asMap());
         return response;
+    }
+
+    @GetMapping("/version")
+    public Map<String, Object> version() {
+        return releaseInfo.asMap();
     }
 
     @GetMapping("/db/time")
