@@ -23,6 +23,13 @@
     connection_pressure_curl_max_time_seconds: 20
     connection_pressure_sample_delay_seconds: 1
 
+    # Preflight guardrail. The playbook is intended to collect pressure evidence,
+    # not a normal baseline report. Override these only when intentionally using a
+    # different bounded profile.
+    connection_pressure_enforce_bounded_settings: true
+    connection_pressure_max_allowed_tomcat_threads: 4
+    connection_pressure_max_allowed_hikari_pool_size: 2
+
   pre_tasks:
     - name: Assert dependent hosts exist
       ansible.builtin.assert:
@@ -157,6 +164,26 @@
         executable: /bin/bash
       register: connection_pressure_baseline
       changed_when: true
+
+    - name: Extract bounded pressure baseline settings
+      ansible.builtin.set_fact:
+        connection_pressure_baseline_tomcat_max_threads: "{{ connection_pressure_baseline.stdout | regex_search('baseline_tomcat_max_threads=([^\n]+)', '\\1') | first | int }}"
+        connection_pressure_baseline_hikari_max_pool_size: "{{ connection_pressure_baseline.stdout | regex_search('baseline_hikari_max_pool_size=([^\n]+)', '\\1') | first | int }}"
+
+    - name: Assert intentionally small pressure settings are active
+      ansible.builtin.assert:
+        that:
+          - "(not (connection_pressure_enforce_bounded_settings | bool)) or ((connection_pressure_baseline_tomcat_max_threads | int) <= (connection_pressure_max_allowed_tomcat_threads | int))"
+          - "(not (connection_pressure_enforce_bounded_settings | bool)) or ((connection_pressure_baseline_hikari_max_pool_size | int) <= (connection_pressure_max_allowed_hikari_pool_size | int))"
+        fail_msg: >-
+          Connection pressure validation expected intentionally small settings, but found
+          Tomcat maxThreads={{ connection_pressure_baseline_tomcat_max_threads }} and
+          Hikari maximumPoolSize={{ connection_pressure_baseline_hikari_max_pool_size }}.
+          Redeploy ops-sample-service with bounded settings or explicitly set
+          connection_pressure_enforce_bounded_settings=false for a baseline-only run.
+        success_msg: >-
+          Bounded pressure settings are active: Tomcat maxThreads={{ connection_pressure_baseline_tomcat_max_threads }},
+          Hikari maximumPoolSize={{ connection_pressure_baseline_hikari_max_pool_size }}.
 
     - name: Run bounded WAS thread pressure through Nginx
       ansible.builtin.shell: |
@@ -519,6 +546,9 @@
           request_prefix={{ connection_pressure_request_prefix }}
           base_url={{ connection_pressure_base_url }}
           result_dir={{ connection_pressure_result_dir }}
+          bounded_settings_enforced={{ connection_pressure_enforce_bounded_settings }}
+          max_allowed_tomcat_threads={{ connection_pressure_max_allowed_tomcat_threads }}
+          max_allowed_hikari_pool_size={{ connection_pressure_max_allowed_hikari_pool_size }}
 
           [baseline]
           {{ connection_pressure_baseline.stdout | default('n/a') }}
