@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap separates completed runtime validation, current portfolio-hardening work, and optional future validation.
+This roadmap separates completed runtime validation, current service-linked operating scenario hardening, and final portfolio documentation.
 
 The fixed project theme is:
 
@@ -12,6 +12,39 @@ Short version:
 
 ```text
 VM 기반 WEB/WAS/DB 운영환경을 직접 구성하고, 장애·성능·복구 문제를 로그와 지표로 분석하는 운영 포트폴리오
+```
+
+## Direction guardrails
+
+This repository is not being restarted as a new project.
+
+Fixed boundaries:
+
+```text
+1. Continue from the existing AWS EC2 repository and evidence.
+2. Do not migrate this project to OCI for v1.0.
+3. Do not turn the project into an OpenKoda installation project.
+4. Do not turn the project into a Terraform, AWS managed architecture, Kubernetes, EKS, or GitOps showcase.
+5. Do not close the project as documentation-only work while service-linked operating scenarios still need design or runtime validation.
+```
+
+Allowed work:
+
+```text
+1. Extend ops-sample-service when a concrete operating scenario requires service behavior.
+2. Add or adjust Nginx, WAS, HikariCP, PostgreSQL, NFS, backup, logging, metrics, or deployment behavior when tied to evidence.
+3. Add open-source tools only when they help diagnose, compare, or validate a concrete operating scenario.
+4. Update documentation after implementation and runtime validation boundaries are clear.
+```
+
+The project must stay evidence-led:
+
+```text
+service behavior
+-> WEB/WAS/DB/Storage operating problem
+-> logs, metrics, config values, HTTP responses, DB rows, or file checksums
+-> diagnosis or recovery action
+-> before/after validation
 ```
 
 ## Status summary
@@ -31,24 +64,33 @@ Phase 5B. server-rendered work-order web workflow: implemented
 Phase 5C. evidence upload/download workflow: implemented
 Phase 5D. WEB/WAS failure-lab endpoints: implemented
 Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
-Phase 6. portfolio hardening and interview readiness: current focus
+Phase 6. service-linked operating scenario hardening: current focus
 ```
 
-## Phase 4 freeze decision
+## Observability expansion policy
 
-Phase 4 observability expansion is complete enough for the portfolio objective.
+Phase 4 already provides enough baseline observability to support the completed evidence. However, observability work is not permanently frozen.
 
-Do not continue expanding this project into:
+Do not expand into dashboard-first or tool-first observability work:
 
 ```text
 Grafana dashboard-first work
-Alertmanager notification maturity
-Loki platform expansion
-blackbox exporter HTTP monitoring
+Alertmanager notification maturity as a standalone goal
+Loki platform expansion without a request/log correlation scenario
+blackbox exporter work without a concrete service-impact question
 PostgreSQL HA/failover
 Kubernetes/EKS/GitOps
 AWS managed architecture replacement
 SLO/SLA compliance work
+```
+
+Observability tools may be introduced later only when they support a concrete operating scenario. Examples:
+
+```text
+- request ID correlation across Nginx and WAS logs
+- PostgreSQL connection pressure diagnosis
+- service impact comparison before and after a setting change
+- alert-rule evidence for a specific failure mode
 ```
 
 Observability remains supporting evidence for diagnosis. It is not the project theme.
@@ -273,54 +315,79 @@ DB web-impact behavior was validated against the enhanced service model
 restore-lab recovery was refreshed against the enhanced service model
 ```
 
-## Current focus: Phase 6 portfolio hardening
+## Current focus: Phase 6 service-linked operating scenario hardening
 
 The project is not finished just because the first enhanced runtime validation completed.
+
+Phase 6 focuses on making the WEB/WAS operations portfolio deeper by connecting service behavior to infrastructure symptoms and evidence.
 
 Current focus:
 
 ```text
-1. Make README and evidence-index reflect validated claims accurately.
-2. Convert raw validation evidence into interview-ready incident reports.
-3. Strengthen portfolio-summary and interview-explanation notes.
-4. Keep claim boundaries strict.
-5. Avoid unnecessary AWS runtime creation.
+1. Reframe documentation so the project is not read as documentation-only or tool-freeze work.
+2. Extend ops-sample-service where required to reproduce realistic operating behavior.
+3. Implement and validate WAS thread pool / HikariCP / PostgreSQL connection pressure behavior.
+4. Runtime-validate release metadata and deployment rollback against real service smoke checks.
+5. Keep claim boundaries strict while avoiding unnecessary AWS runtime creation.
+6. Perform final README/evidence-index/interview documentation after runtime scope is complete.
 ```
 
 Recommended next PR categories:
 
 ```text
-[DOCS] Add incident reports for enhanced operating scenarios
-[DOCS] Harden evidence index claim mapping
-[DOCS] Improve interview explanation notes
-[VALIDATION] Add VM/systemd deployment rollback scenario only if justified
+[DOCS] Reframe phase 6 as service-linked scenario hardening
+[APP] Add connection pressure workload behavior
+[ANSIBLE] Add connection pressure validation playbook
+[VALIDATION] Collect connection pressure runtime evidence
+[VALIDATION] Runtime-validate release metadata and rollback behavior
+[DOCS] Finalize evidence index and incident reports after runtime validation
 ```
 
-## Optional future runtime validation
-
-Do not open AWS runtime by default.
-
-If one more validation window is justified, prioritize:
+## v1.0 remaining milestones
 
 ```text
-VM/systemd app deployment and rollback scenario
+M1. Direction correction
+    - fix documentation-only / expansion-freeze wording
+    - keep AWS EC2 as the runtime boundary
+    - mark ops-sample-service as extensible for operating scenarios
+
+M2. Service workload hardening
+    - add only service behavior required by operating scenarios
+    - prioritize DB hold / connection pressure behavior
+    - keep feature work subordinate to WEB/WAS/DB evidence
+
+M3. Connection pressure validation
+    - reproduce HikariCP / PostgreSQL connection pressure
+    - compare HTTP responses, Nginx logs, WAS logs, DB state, and settings
+    - collect before/after evidence for a bounded setting change
+
+M4. Deployment failure and rollback validation
+    - runtime-check release metadata
+    - validate bad deployment detection
+    - rollback and verify core work-order/evidence service functions
+
+M5. Final portfolio documentation
+    - update README, evidence-index, incident reports, portfolio summary, and interview Q&A
+    - do this after runtime evidence boundaries are final
 ```
 
-Reason:
+## v1.0 exclusion list
+
+Do not expand v1.0 into:
 
 ```text
-The current project already has strong failure, latency, DB-impact, backup, and restore evidence.
-A deployment/rollback scenario would strengthen WEB/WAS operations interview readiness without changing the project theme.
-```
-
-Do not expand into:
-
-```text
+OCI migration
+OpenKoda adoption as the main workload
 Blue/Green overengineering
 GitHub Actions deployment automation as the main topic
 EKS/GitOps migration
 ALB/RDS redesign
-Grafana dashboard work
+Grafana dashboard project
+Loki/Alertmanager platform project
+JMeter/k6 large-scale load-testing project
+PostgreSQL HA/failover
+SLO/SLA compliance work
+application feature development unrelated to operating evidence
 ```
 
 ## Safe claims by category
