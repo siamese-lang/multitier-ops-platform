@@ -32,6 +32,7 @@ Interview explanation points
 
 | Report | Main operating point |
 |---|---|
+| `enhanced-service-workflow-baseline-report.md` | Establish the enhanced web work-order/evidence-file service as the operating workload before incident scenarios. |
 | `upload-limit-incident-report.md` | Distinguish WEB upload limit, WAS multipart handling, DB metadata, and NFS file object behavior. |
 | `latency-diagnosis-incident-report.md` | Separate WAS-side slow request from DB-backed slow path. |
 | `db-web-impact-incident-report.md` | Explain how DB service failure affects readiness, web pages, and DB-backed APIs while process health can stay up. |
