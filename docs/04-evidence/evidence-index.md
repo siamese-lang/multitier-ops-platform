@@ -33,6 +33,8 @@ Recovery is claimed only when restored DB/file data is validated in restore-lab 
 A monitoring rule evaluation is not production monitoring maturity.
 A lab incident is not production operations experience.
 Connection-pressure validation is bounded lab evidence, not production load testing or capacity sizing.
+NFS mount failure validation is bounded lab evidence, not storage HA or automatic failover.
+Nginx config rollback validation is bounded WEB-tier evidence, not production change-management maturity.
 ```
 
 ## Current validation state
@@ -47,45 +49,25 @@ Phase 4A. observability logs/service/request-path evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
-Phase 5E. enhanced-service runtime validation: completed as first enhanced validation pass
+Phase 5E. enhanced-service runtime validation: completed
 Phase 6A. bounded WEB/WAS/DB connection-pressure validation: completed
+Phase 6B. bad WAS artifact deployment and rollback validation: completed
+Phase 6C. app-side NFS mount failure and recovery validation: completed
+Phase 6D. Nginx bad config detection and rollback validation: completed
+Final cleanup. lab-full-ops AWS resources destroyed after evidence collection: completed
 ```
 
-Enhanced validation scope completed:
+Final runtime summary:
 
 ```text
-S1 enhanced service workflow validation: completed
-S2 upload-limit incident validation: completed
-S3 latency scenario validation: completed
-S4 DB web-impact incident validation: completed
-Backup baseline: completed
-Restore-lab DB/file restore baseline: completed
-Restore-lab HTTP/API consistency validation: completed
-Source lab destroy: completed
-Restore lab destroy: completed
-```
-
-Connection-pressure validation completed:
-
-```text
-WAS request-thread pressure: delayed but successful DB-backed summary response
-HikariCP connection-pool pressure: DB-backed request failure while PostgreSQL stayed active
-Cross-tier evidence: Nginx access log, app journald, HikariCP pool state, PostgreSQL pg_stat_activity, HTTP status/timing metrics
-Runtime status: lab-full-ops EC2 environment intentionally retained for follow-up AWS validation work
-Cost control: NAT Gateway disabled after package installation and validation
-```
-
-Current-state document:
-
-```text
-docs/00-project/current-state-after-enhanced-runtime-validation.md
+docs/04-evidence/final-runtime-validation-2026-07-13.md
 ```
 
 ## Claim map
 
 | Claim | Supporting evidence |
 |---|---|
-| EC2 temporary runtime lifecycle works through Terraform, bastion, Ansible, and cleanup | `lab-runtime` evidence and README/roadmap Phase 0 |
+| EC2 temporary runtime lifecycle works through Terraform, bastion, Ansible, and cleanup | `lab-runtime` evidence, README, `docs/04-evidence/final-runtime-validation-2026-07-13.md` |
 | WEB/WAS/DB normal path was validated | `docs/04-evidence/lab-full-min-web-was-db-integrated-validation.md` |
 | WAS failure and rolling restart behavior were validated | `docs/04-evidence/lab-full-min-continuous-operations-validation.md` |
 | Storage tier was integrated with DB metadata and NFS file objects | `docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md` |
@@ -101,9 +83,14 @@ docs/00-project/current-state-after-enhanced-runtime-validation.md
 | WAS sleep vs DB sleep latency behavior was validated | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | DB web-impact incident was validated against the enhanced service model | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | Restore-lab recovery was refreshed against the enhanced service model | `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` |
-| Bounded WEB/WAS/DB connection pressure was validated through Nginx, embedded Tomcat, HikariCP, and PostgreSQL | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
+| Bounded WEB/WAS/DB connection pressure was validated through Nginx, embedded Tomcat, HikariCP, and PostgreSQL | `docs/04-evidence/connection-pressure-validation-2026-07-13.md`, `docs/04-evidence/final-runtime-validation-2026-07-13.md` |
 | WAS request-thread pressure caused delayed but successful DB-backed API behavior | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
 | HikariCP pool pressure caused DB-backed API failure while PostgreSQL remained active | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
+| Bad WAS artifact deployment was detected and rolled back through jar/env restore | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
+| App-side NFS mount loss affected evidence-file creation while DB-backed work-order creation remained available | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
+| NFS remount restored evidence-file consistency with DB metadata, NFS object, size, and SHA-256 checks | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
+| Invalid Nginx config candidate was rejected by `nginx -t` before unsafe reload and restored config was reloaded successfully | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
+| AWS lab resources were destroyed after evidence collection | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, local final-state Terraform evidence archive |
 
 ## Core evidence documents
 
@@ -192,19 +179,6 @@ checksum_matches=true
 http_api_restore_status=validated
 ```
 
-Supported evidence:
-
-```text
-separate restore-lab environment
-pg_restore result
-restic restore result
-restored metadata row counts
-sample evidence file existence
-sample file size match
-sample file SHA-256 match
-HTTP/API consistency through Nginx
-```
-
 Supported claim:
 
 ```text
@@ -240,28 +214,10 @@ request-path probe evidence
 controlled DB service unavailable incident report
 ```
 
-Supported claim:
-
-```text
-Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
-```
-
 ### Prometheus metrics validation
 
 ```text
 docs/04-evidence/observability-metrics-validation-2026-07-12.md
-```
-
-Supported evidence:
-
-```text
-node_exporter on nginx-01, app-01, db-primary-01, nfs-01, backup-01
-Prometheus on mon-01
-node_exporter scrape targets
-up query results
-DB service incident with db-primary-01 host metrics still available
-/readyz and summary path failures during DB service outage
-post-recovery service/API checks
 ```
 
 Supported claims:
@@ -275,20 +231,6 @@ Prometheus metrics helped distinguish DB host reachability from DB service depen
 
 ```text
 docs/04-evidence/observability-alert-validation-2026-07-12.md
-```
-
-Supported evidence:
-
-```text
-DB node_exporter systemd collector enabled
-node_systemd_unit_state for postgresql.service
-Prometheus rule loaded through /api/v1/rules
-normal state had no firing alert
-incident state produced ALERTS firing result
-postgresql active metric became 0
-DB node_exporter up metric remained 1
-post-incident PostgreSQL and API recovery succeeded
-Terraform destroy completed after evidence collection
 ```
 
 Supported claim:
@@ -324,70 +266,10 @@ source lab destroy
 restore lab destroy
 ```
 
-Supported evidence categories:
-
-```text
-work-order page smoke
-work-order create/status-change workflow
-status history and audit log visibility
-evidence upload/download path
-DB metadata and NFS file object consistency
-request ID based WEB/WAS log correlation
-upload-limit behavior
-WAS sleep vs DB sleep latency behavior
-DB web-impact behavior
-restore-lab recovery after enhanced service model
-```
-
 ### Connection pressure validation
 
 ```text
 docs/04-evidence/connection-pressure-validation-2026-07-13.md
-```
-
-Bounded profile:
-
-```text
-baseline_tomcat_max_threads=4
-baseline_tomcat_min_spare_threads=2
-baseline_tomcat_accept_count=8
-baseline_hikari_max_pool_size=2
-baseline_hikari_min_idle=1
-baseline_hikari_connection_timeout_ms=3000
-```
-
-WAS request-thread pressure evidence:
-
-```text
-was_concurrency=4
-was_pressure_http_2xx=4
-was_summary_during_http_code=200
-was_summary_during_time_total=9.071659
-was_pressure_request_threads=http-nio-8080-exec-1,http-nio-8080-exec-2,http-nio-8080-exec-3,http-nio-8080-exec-4
-```
-
-HikariCP pool pressure evidence:
-
-```text
-db_concurrency=4
-db_pressure_http_2xx=2
-db_pressure_http_503=2
-db_summary_during_http_code=503
-db_pool_maximum_pool_size=2
-db_pool_active_connections=2
-db_pool_idle_connections=0
-db_pool_total_connections=2
-```
-
-PostgreSQL activity evidence:
-
-```text
-db_host=db-primary-01
-db_name=opsdb
-state=active
-wait_event_type=Timeout
-wait_event=PgSleep
-query=select pg_sleep($1)
 ```
 
 Supported claims:
@@ -410,6 +292,43 @@ PostgreSQL HA/failover
 production incident response experience
 ```
 
+### Final runtime validation and cleanup
+
+```text
+docs/04-evidence/final-runtime-validation-2026-07-13.md
+```
+
+Completed final runtime scenarios:
+
+```text
+connection pressure validation
+bad WAS artifact deployment and rollback validation
+app-side NFS mount failure and recovery validation
+Nginx bad config detection and rollback validation
+AWS lab cleanup/destroy after evidence collection
+```
+
+Supported claims:
+
+```text
+The final lab-full-ops runtime validation window was completed.
+The project now has WEB, WAS, WAS/DB, Storage, Backup/Restore, and Observability evidence categories.
+AWS lab resources were destroyed after evidence collection.
+```
+
+Unsupported claims:
+
+```text
+production operations experience
+production change management
+production load testing
+production storage HA
+production DR
+RPO/RTO guarantee
+zero-downtime release guarantee
+blue-green/canary deployment
+```
+
 ## Service implementation references
 
 These documents describe the current enhanced service implementation:
@@ -418,65 +337,4 @@ These documents describe the current enhanced service implementation:
 apps/ops-sample-service/README.md
 apps/ops-sample-service/FAILURE_LAB.md
 docs/00-project/ops-sample-service-completion-scope.md
-```
-
-## Evidence archives kept locally
-
-Known local archives from validation windows include `.tmp/`, `/tmp`, or local evidence bundles outside the repository. They are intentionally not committed.
-
-Examples referenced by evidence documents include:
-
-```text
-.tmp/observability-baseline-20260712T110244Z.tar.gz
-.tmp/observability-metrics-20260712T121325Z.tar.gz
-.tmp/observability-alert-20260712T131524Z.tar.gz
-.tmp/restore-lab-runtime-20260713T091446
-/mnt/c/Project/test/multitier-ops-platform-evidence/connection-pressure
-```
-
-## Claims not supported by this evidence set
-
-Do not claim:
-
-```text
-production operations experience
-production-grade monitoring maturity
-Grafana dashboard readiness
-Alertmanager notification maturity
-paging or on-call workflow
-PostgreSQL HA
-automatic failover
-SLO/SLA compliance
-Kubernetes/EKS/GitOps operation
-AWS managed architecture operation
-commercial ITSM implementation
-production disaster recovery
-RPO/RTO guarantee
-production load testing
-capacity sizing
-external Tomcat/WAR operation
-```
-
-## Current portfolio-hardening work
-
-The next project phase is not additional feature work by default.
-
-Current focus:
-
-```text
-incident report layer
-interview explanation notes
-portfolio summary quality
-claim-to-evidence readability
-optional VM/systemd deployment rollback validation if justified
-```
-
-Recommended incident report documents:
-
-```text
-docs/05-incident-reports/upload-limit-incident-report.md
-docs/05-incident-reports/latency-diagnosis-incident-report.md
-docs/05-incident-reports/db-web-impact-incident-report.md
-docs/05-incident-reports/restore-lab-recovery-incident-report.md
-docs/05-incident-reports/connection-pressure-incident-report.md
 ```
