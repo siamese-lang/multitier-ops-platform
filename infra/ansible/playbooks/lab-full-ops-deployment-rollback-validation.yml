@@ -1,0 +1,332 @@
+---
+- name: Validate ops-sample-service VM deployment and rollback path
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    ops_deploy_candidate_source_path: ""
+    ops_deploy_candidate_version: "{{ ops_app_version | default('0.1.0') }}"
+    ops_deploy_candidate_id: "candidate-{{ ops_deploy_candidate_version }}-{{ ansible_date_time.epoch }}"
+    ops_deploy_candidate_slot: candidate
+    ops_deploy_backup_dir: "{{ ops_app_home }}/releases"
+    ops_deploy_previous_jar_backup: "{{ ops_deploy_backup_dir }}/ops-sample-service.jar.previous-{{ ansible_date_time.epoch }}"
+    ops_deploy_previous_env_backup: "{{ ops_deploy_backup_dir }}/ops-sample-service.env.previous-{{ ansible_date_time.epoch }}"
+    ops_deploy_env_file: "{{ ops_app_config_dir }}/ops-sample-service.env"
+    ops_deploy_version_url: "{{ ops_app_version_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/version') }}"
+    ops_deploy_always_rollback: true
+    ops_deploy_report_dir: "{{ ops_app_report_dir | default('/tmp/multitier-ops-platform') }}"
+    ops_deploy_report_file: "{{ ops_deploy_report_dir }}/lab-full-ops-deployment-rollback-{{ inventory_hostname }}.txt"
+
+  pre_tasks:
+    - name: Assert candidate artifact path is supplied
+      ansible.builtin.assert:
+        that:
+          - ops_deploy_candidate_source_path | length > 0
+        fail_msg: >-
+          Set ops_deploy_candidate_source_path to a local jar artifact before running
+          the deployment rollback validation playbook.
+
+    - name: Check candidate jar artifact on control host
+      ansible.builtin.stat:
+        path: "{{ ops_deploy_candidate_source_path }}"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: ops_deploy_candidate_local_stat
+
+    - name: Assert candidate jar artifact exists on control host
+      ansible.builtin.assert:
+        that:
+          - ops_deploy_candidate_local_stat.stat.exists
+        fail_msg: "Candidate jar artifact was not found at {{ ops_deploy_candidate_source_path }}."
+
+  tasks:
+    - name: Ensure rollback backup directory exists
+      ansible.builtin.file:
+        path: "{{ ops_deploy_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Capture current service state before deployment
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: ops_deploy_before_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Capture current version metadata before deployment
+      ansible.builtin.command: "curl -fsS {{ ops_deploy_version_url }}"
+      register: ops_deploy_before_version
+      changed_when: false
+      failed_when: false
+
+    - name: Check current jar artifact before deployment
+      ansible.builtin.stat:
+        path: "{{ ops_app_jar_dest }}"
+        checksum_algorithm: sha256
+      register: ops_deploy_previous_jar_stat
+
+    - name: Assert current jar artifact exists before deployment
+      ansible.builtin.assert:
+        that:
+          - ops_deploy_previous_jar_stat.stat.exists
+        fail_msg: "Current app jar was not found at {{ ops_app_jar_dest }}. Run the app deployment baseline first."
+
+    - name: Back up current jar before candidate deployment
+      ansible.builtin.copy:
+        src: "{{ ops_app_jar_dest }}"
+        dest: "{{ ops_deploy_previous_jar_backup }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Check current environment file before deployment
+      ansible.builtin.stat:
+        path: "{{ ops_deploy_env_file }}"
+      register: ops_deploy_previous_env_stat
+
+    - name: Back up current environment file before candidate deployment
+      ansible.builtin.copy:
+        src: "{{ ops_deploy_env_file }}"
+        dest: "{{ ops_deploy_previous_env_backup }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: ops_deploy_previous_env_stat.stat.exists
+      no_log: true
+
+    - name: Candidate deployment block
+      block:
+        - name: Copy candidate jar into service path
+          ansible.builtin.copy:
+            src: "{{ ops_deploy_candidate_source_path }}"
+            dest: "{{ ops_app_jar_dest }}"
+            owner: "{{ ops_app_user }}"
+            group: "{{ ops_app_group }}"
+            mode: "0644"
+
+        - name: Collect candidate jar checksum on app node
+          ansible.builtin.stat:
+            path: "{{ ops_app_jar_dest }}"
+            checksum_algorithm: sha256
+          register: ops_deploy_candidate_remote_stat
+
+        - name: Set candidate APP_VERSION in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^APP_VERSION='
+            line: "APP_VERSION={{ ops_deploy_candidate_version }}"
+            create: false
+          no_log: true
+
+        - name: Set candidate deployment id in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^OPS_DEPLOYMENT_ID='
+            line: "OPS_DEPLOYMENT_ID={{ ops_deploy_candidate_id }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Set candidate deployment slot in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^OPS_DEPLOYMENT_SLOT='
+            line: "OPS_DEPLOYMENT_SLOT={{ ops_deploy_candidate_slot }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Set candidate deployed-at timestamp in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^OPS_DEPLOYED_AT='
+            line: "OPS_DEPLOYED_AT={{ ansible_date_time.iso8601 }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Set candidate artifact source in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^OPS_ARTIFACT_SOURCE='
+            line: "OPS_ARTIFACT_SOURCE={{ ops_deploy_candidate_source_path }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Set candidate artifact checksum in existing environment file
+          ansible.builtin.lineinfile:
+            path: "{{ ops_deploy_env_file }}"
+            regexp: '^OPS_ARTIFACT_SHA256='
+            line: "OPS_ARTIFACT_SHA256={{ ops_deploy_candidate_remote_stat.stat.checksum | default('unknown') }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Restart service with candidate artifact
+          ansible.builtin.systemd:
+            name: ops-sample-service
+            state: restarted
+            daemon_reload: true
+
+        - name: Wait for candidate HTTP port
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ ops_app_port }}"
+            timeout: 60
+
+        - name: Validate candidate health
+          ansible.builtin.command: "curl -fsS {{ ops_app_healthcheck_url }}"
+          register: ops_deploy_candidate_health
+          changed_when: false
+
+        - name: Validate candidate version metadata
+          ansible.builtin.command: "curl -fsS {{ ops_deploy_version_url }}"
+          register: ops_deploy_candidate_version
+          changed_when: false
+
+        - name: Validate candidate readiness
+          ansible.builtin.command: "curl -fsS {{ ops_app_readycheck_url }}"
+          register: ops_deploy_candidate_ready
+          changed_when: false
+          failed_when: ops_app_expect_db_ready | bool and ops_deploy_candidate_ready.rc != 0
+
+        - name: Validate candidate DB-backed summary
+          ansible.builtin.command: "curl -fsS {{ ops_app_work_orders_summary_url }}"
+          register: ops_deploy_candidate_summary
+          changed_when: false
+          failed_when: ops_app_expect_db_ready | bool and ops_deploy_candidate_summary.rc != 0
+
+        - name: Mark candidate validation successful
+          ansible.builtin.set_fact:
+            ops_deploy_candidate_failed: false
+
+      rescue:
+        - name: Mark candidate validation failed
+          ansible.builtin.set_fact:
+            ops_deploy_candidate_failed: true
+
+        - name: Capture candidate failure service state
+          ansible.builtin.command: systemctl is-active ops-sample-service
+          register: ops_deploy_candidate_failure_service_state
+          changed_when: false
+          failed_when: false
+
+    - name: Restore previous jar during rollback
+      ansible.builtin.copy:
+        src: "{{ ops_deploy_previous_jar_backup }}"
+        dest: "{{ ops_app_jar_dest }}"
+        remote_src: true
+        owner: "{{ ops_app_user }}"
+        group: "{{ ops_app_group }}"
+        mode: "0644"
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Restore previous environment file during rollback
+      ansible.builtin.copy:
+        src: "{{ ops_deploy_previous_env_backup }}"
+        dest: "{{ ops_deploy_env_file }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - ops_deploy_previous_env_stat.stat.exists
+        - ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+      no_log: true
+
+    - name: Restart service after rollback
+      ansible.builtin.systemd:
+        name: ops-sample-service
+        state: restarted
+        daemon_reload: true
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Wait for rollback HTTP port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ ops_app_port }}"
+        timeout: 60
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Validate rollback health
+      ansible.builtin.command: "curl -fsS {{ ops_app_healthcheck_url }}"
+      register: ops_deploy_rollback_health
+      changed_when: false
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Validate rollback version metadata
+      ansible.builtin.command: "curl -fsS {{ ops_deploy_version_url }}"
+      register: ops_deploy_rollback_version
+      changed_when: false
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Validate rollback readiness
+      ansible.builtin.command: "curl -fsS {{ ops_app_readycheck_url }}"
+      register: ops_deploy_rollback_ready
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and ops_deploy_rollback_ready.rc != 0
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Validate rollback DB-backed summary
+      ansible.builtin.command: "curl -fsS {{ ops_app_work_orders_summary_url }}"
+      register: ops_deploy_rollback_summary
+      changed_when: false
+      failed_when: ops_app_expect_db_ready | bool and ops_deploy_rollback_summary.rc != 0
+      when: ops_deploy_always_rollback | bool or ops_deploy_candidate_failed | default(false) | bool
+
+    - name: Collect final service state
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: ops_deploy_final_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure deployment rollback report directory exists
+      ansible.builtin.file:
+        path: "{{ ops_deploy_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write deployment rollback validation report
+      ansible.builtin.copy:
+        dest: "{{ ops_deploy_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default(ops_app_environment) }}
+          inventory_hostname={{ inventory_hostname }}
+          service_name=ops-sample-service
+          before_service_state={{ ops_deploy_before_service_state.stdout | default('n/a') }}
+          final_service_state={{ ops_deploy_final_service_state.stdout | default('n/a') }}
+          previous_jar={{ ops_app_jar_dest }}
+          previous_jar_backup={{ ops_deploy_previous_jar_backup }}
+          previous_jar_sha256={{ ops_deploy_previous_jar_stat.stat.checksum | default('unknown') }}
+          candidate_source={{ ops_deploy_candidate_source_path }}
+          candidate_local_sha256={{ ops_deploy_candidate_local_stat.stat.checksum | default('unknown') }}
+          candidate_remote_sha256={{ ops_deploy_candidate_remote_stat.stat.checksum | default('not-deployed') }}
+          candidate_id={{ ops_deploy_candidate_id }}
+          candidate_failed={{ ops_deploy_candidate_failed | default(false) }}
+          always_rollback={{ ops_deploy_always_rollback }}
+          candidate_health_rc={{ ops_deploy_candidate_health.rc | default('not-run') }}
+          candidate_version_rc={{ ops_deploy_candidate_version.rc | default('not-run') }}
+          candidate_ready_rc={{ ops_deploy_candidate_ready.rc | default('not-run') }}
+          candidate_summary_rc={{ ops_deploy_candidate_summary.rc | default('not-run') }}
+          rollback_health_rc={{ ops_deploy_rollback_health.rc | default('not-run') }}
+          rollback_version_rc={{ ops_deploy_rollback_version.rc | default('not-run') }}
+          rollback_ready_rc={{ ops_deploy_rollback_ready.rc | default('not-run') }}
+          rollback_summary_rc={{ ops_deploy_rollback_summary.rc | default('not-run') }}
+          deployment_rollback_status={{ 'validated' if (ops_deploy_final_service_state.stdout | default('')) == 'active' else 'check_required' }}
+
+    - name: Display deployment rollback validation report
+      ansible.builtin.command: "cat {{ ops_deploy_report_file }}"
+      register: ops_deploy_report
+      changed_when: false
+
+    - name: Show deployment rollback validation report
+      ansible.builtin.debug:
+        var: ops_deploy_report.stdout_lines
