@@ -163,20 +163,28 @@ preserved backup artifact
 ```text
 1. README.md
    - project identity, completed evidence, current validation boundary
-2. docs/00-project/current-state-after-enhanced-runtime-validation.md
+2. docs/00-project/portfolio-review-guide.md
+   - recommended review order for this operations portfolio
+3. docs/00-project/current-state-after-enhanced-runtime-validation.md
    - current completed validation state
-3. apps/ops-sample-service/README.md
-   - operated service behavior and endpoints
-4. apps/ops-sample-service/FAILURE_LAB.md
-   - WEB/WAS failure-lab scenarios
-5. docs/00-project/portfolio-summary.md
+4. docs/00-project/portfolio-summary.md
    - recruiter/interviewer-facing summary
-6. docs/04-evidence/evidence-index.md
+5. docs/04-evidence/evidence-index.md
    - claim-to-evidence map
-7. docs/00-project/interview-explanation-notes.md
-   - 30-second/2-minute explanation and interview Q&A
-8. docs/00-project/submission-description-notes.md
-   - application-form and portfolio URL wording
+6. docs/05-incident-reports/README.md
+   - incident-report index and evidence boundary
+7. docs/05-incident-reports/*.md
+   - operations narratives for each scenario
+8. docs/00-project/interview-incident-qna.md
+   - scenario-specific interview Q&A
+9. docs/00-project/interview-explanation-notes.md
+   - 30-second/2-minute explanation and broader interview Q&A
+10. apps/ops-sample-service/README.md
+    - operated service behavior and endpoints
+11. apps/ops-sample-service/FAILURE_LAB.md
+    - WEB/WAS failure-lab scenarios
+12. docs/00-project/submission-description-notes.md
+    - application-form and portfolio URL wording
 ```
 
 ## 핵심 evidence 문서
@@ -200,6 +208,20 @@ docs/04-evidence/observability-baseline-validation-2026-07-12.md
 docs/04-evidence/observability-metrics-validation-2026-07-12.md
 docs/04-evidence/observability-alert-validation-2026-07-12.md
 docs/00-project/current-state-after-enhanced-runtime-validation.md
+```
+
+면접 설명용 문서:
+
+```text
+docs/00-project/portfolio-review-guide.md
+docs/05-incident-reports/README.md
+docs/05-incident-reports/enhanced-service-workflow-baseline-report.md
+docs/05-incident-reports/upload-limit-incident-report.md
+docs/05-incident-reports/latency-diagnosis-incident-report.md
+docs/05-incident-reports/db-web-impact-incident-report.md
+docs/05-incident-reports/restore-lab-recovery-incident-report.md
+docs/00-project/interview-incident-qna.md
+docs/00-project/interview-explanation-notes.md
 ```
 
 ## 기술별 역할
