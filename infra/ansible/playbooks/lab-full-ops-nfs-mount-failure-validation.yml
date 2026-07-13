@@ -1,0 +1,382 @@
+---
+- name: Validate app-side NFS mount failure and recovery behavior
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    nfs_failure_request_prefix: lab-full-ops-nfs-mount-failure
+    nfs_failure_report_dir: /tmp/multitier-ops-platform
+    nfs_failure_result_dir: "{{ nfs_failure_report_dir }}/lab-full-ops-nfs-mount-failure"
+    nfs_failure_report_file: "{{ nfs_failure_report_dir }}/lab-full-ops-nfs-mount-failure-{{ inventory_hostname }}.txt"
+    nfs_failure_base_url: https://127.0.0.1
+    nfs_failure_app_host: "{{ groups['app'][0] | default('app-01') }}"
+    nfs_failure_storage_host: "{{ groups['storage'][0] | default('nfs-01') }}"
+    nfs_failure_mount_path: "{{ hostvars[nfs_failure_app_host].lab_full_ops_app_nfs_mount_path | default('/mnt/ops-sample/files') }}"
+    nfs_failure_export_root: "{{ hostvars[nfs_failure_storage_host].lab_full_ops_app_nfs_export_path | default('/srv/ops-sample/files') }}"
+
+  pre_tasks:
+    - name: Assert app and storage hosts exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - nfs_failure_app_host in groups['app']
+          - groups['storage'] is defined
+          - nfs_failure_storage_host in groups['storage']
+        fail_msg: "app-01 and nfs-01 must exist before running the NFS mount failure validation."
+
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this validation from nginx-01 through the web inventory group."
+
+    - name: Explain runtime boundary
+      ansible.builtin.debug:
+        msg:
+          - "This is a bounded app-side NFS mount failure validation."
+          - "It validates file-storage impact and recovery for the work-order evidence flow."
+          - "It is not production chaos engineering, storage HA, or NFS tuning evidence."
+
+  tasks:
+    - name: Ensure NFS failure result directory exists on web node
+      ansible.builtin.file:
+        path: "{{ nfs_failure_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Capture baseline Nginx service path before NFS failure
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ nfs_failure_result_dir }}"
+        base_url="{{ nfs_failure_base_url }}"
+        request_prefix="{{ nfs_failure_request_prefix }}"
+
+        curl -k -sS -o "${result_dir}/baseline-file-storage-check.json" \
+          -w 'baseline_storage_http_code=%{http_code}\nbaseline_storage_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-storage" \
+          "${base_url}/api/failure-lab/file-storage-check" \
+          > "${result_dir}/baseline-file-storage-check.metrics"
+
+        curl -k -sS -o "${result_dir}/baseline-summary.json" \
+          -w 'baseline_summary_http_code=%{http_code}\nbaseline_summary_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${result_dir}/baseline-summary.metrics"
+
+        python3 - <<'PY' "${result_dir}/baseline-file-storage-check.json" "${result_dir}/baseline-file-storage-check.metrics" "${result_dir}/baseline-summary.metrics"
+        import json
+        import sys
+        storage_json, storage_metrics, summary_metrics = sys.argv[1:]
+        data = json.load(open(storage_json))
+        storage = data.get("storage", {})
+        for path in [storage_metrics, summary_metrics]:
+            print(open(path).read().strip())
+        print(f"baseline_storage_ready={str(storage.get('ready')).lower()}")
+        print(f"baseline_storage_exists={str(storage.get('exists')).lower()}")
+        print(f"baseline_storage_directory={str(storage.get('directory')).lower()}")
+        print(f"baseline_storage_readable={str(storage.get('readable')).lower()}")
+        print(f"baseline_storage_writable={str(storage.get('writable')).lower()}")
+        PY
+      args:
+        executable: /bin/bash
+      register: nfs_failure_baseline_http
+      changed_when: false
+
+    - name: Capture baseline app-side mount state
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mount_path="{{ nfs_failure_mount_path }}"
+        if mountpoint -q "${mount_path}"; then
+          echo "baseline_mount_state=mounted"
+        else
+          echo "baseline_mount_state=not_mounted"
+        fi
+        findmnt --target "${mount_path}" --output SOURCE,TARGET,FSTYPE,OPTIONS --noheadings || true
+        stat -c 'baseline_mount_path_owner=%U:%G' "${mount_path}" || true
+        stat -c 'baseline_mount_path_mode=%a' "${mount_path}" || true
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ nfs_failure_app_host }}"
+      register: nfs_failure_baseline_mount
+      changed_when: false
+
+    - name: Assert baseline NFS mount and storage readiness are healthy
+      ansible.builtin.assert:
+        that:
+          - nfs_failure_baseline_http.stdout is search('baseline_storage_http_code=200')
+          - nfs_failure_baseline_http.stdout is search('baseline_summary_http_code=200')
+          - nfs_failure_baseline_http.stdout is search('baseline_storage_ready=true')
+          - nfs_failure_baseline_mount.stdout is search('baseline_mount_state=mounted')
+        fail_msg: "Baseline app-side NFS mount or storage readiness is not healthy. Do not run the failure drill."
+
+    - name: Run app-side NFS mount failure window and always remount
+      block:
+        - name: Unmount app-side NFS path and make local fallback unwritable to app user
+          ansible.builtin.shell: |
+            set -euo pipefail
+            mount_path="{{ nfs_failure_mount_path }}"
+            if mountpoint -q "${mount_path}"; then
+              umount "${mount_path}"
+            fi
+            install -d -o root -g root -m 0755 "${mount_path}"
+            if mountpoint -q "${mount_path}"; then
+              echo "outage_mount_state=still_mounted"
+            else
+              echo "outage_mount_state=not_mounted"
+            fi
+            stat -c 'outage_mount_path_owner=%U:%G' "${mount_path}" || true
+            stat -c 'outage_mount_path_mode=%a' "${mount_path}" || true
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ nfs_failure_app_host }}"
+          register: nfs_failure_unmount_result
+          changed_when: true
+
+        - name: Capture storage readiness and evidence-create behavior during NFS outage
+          ansible.builtin.shell: |
+            set -uo pipefail
+            result_dir="{{ nfs_failure_result_dir }}"
+            base_url="{{ nfs_failure_base_url }}"
+            request_prefix="{{ nfs_failure_request_prefix }}"
+
+            curl -k -sS -o "${result_dir}/outage-file-storage-check.json" \
+              -w 'outage_storage_http_code=%{http_code}\noutage_storage_time_total=%{time_total}\n' \
+              -H "X-Request-Id: ${request_prefix}-outage-storage" \
+              "${base_url}/api/failure-lab/file-storage-check" \
+              > "${result_dir}/outage-file-storage-check.metrics"
+            outage_storage_rc=$?
+
+            curl -k -sS -o "${result_dir}/outage-work-order-create.json" \
+              -w 'outage_work_order_http_code=%{http_code}\noutage_work_order_time_total=%{time_total}\n' \
+              -H "X-Request-Id: ${request_prefix}-outage-create-work-order" \
+              -H 'Content-Type: application/json' \
+              -X POST "${base_url}/api/work-orders" \
+              -d '{"title":"lab-full-ops NFS mount failure validation","priority":"HIGH","assignee":"ops-admin","description":"Created during app-side NFS mount failure validation."}' \
+              > "${result_dir}/outage-work-order-create.metrics"
+            work_order_rc=$?
+
+            work_order_id=unknown
+            if [ "${work_order_rc}" -eq 0 ]; then
+              work_order_id=$(python3 -c "import json; print(json.load(open('${result_dir}/outage-work-order-create.json'))['data']['id'])" 2>/dev/null || echo unknown)
+            fi
+
+            evidence_http_code=000
+            evidence_time_total=0
+            evidence_rc=99
+            if [ "${work_order_id}" != "unknown" ]; then
+              evidence_metrics=$(curl -k -sS -o "${result_dir}/outage-evidence-create.json" \
+                -w '%{http_code} %{time_total}' \
+                -H "X-Request-Id: ${request_prefix}-outage-create-evidence" \
+                -X POST "${base_url}/api/work-orders/${work_order_id}/evidence-files")
+              evidence_rc=$?
+              evidence_http_code=$(echo "${evidence_metrics}" | awk '{print $1}')
+              evidence_time_total=$(echo "${evidence_metrics}" | awk '{print $2}')
+              printf 'outage_evidence_http_code=%s\noutage_evidence_time_total=%s\n' "${evidence_http_code}" "${evidence_time_total}" > "${result_dir}/outage-evidence-create.metrics"
+            fi
+
+            python3 - <<'PY' "${result_dir}/outage-file-storage-check.json" "${result_dir}/outage-file-storage-check.metrics" "${result_dir}/outage-work-order-create.metrics" "${result_dir}/outage-evidence-create.metrics"
+            import json
+            import sys
+            storage_json, storage_metrics, work_order_metrics, evidence_metrics = sys.argv[1:]
+            data = json.load(open(storage_json))
+            storage = data.get("storage", {})
+            for path in [storage_metrics, work_order_metrics, evidence_metrics]:
+                print(open(path).read().strip())
+            print(f"outage_storage_ready={str(storage.get('ready')).lower()}")
+            print(f"outage_storage_exists={str(storage.get('exists')).lower()}")
+            print(f"outage_storage_directory={str(storage.get('directory')).lower()}")
+            print(f"outage_storage_readable={str(storage.get('readable')).lower()}")
+            print(f"outage_storage_writable={str(storage.get('writable')).lower()}")
+            PY
+            echo "outage_storage_curl_rc=${outage_storage_rc}"
+            echo "outage_work_order_curl_rc=${work_order_rc}"
+            echo "outage_work_order_id=${work_order_id}"
+            echo "outage_evidence_curl_rc=${evidence_rc}"
+          args:
+            executable: /bin/bash
+          register: nfs_failure_outage_api
+          changed_when: true
+          failed_when: false
+
+      always:
+        - name: Remount app-side NFS path after failure window
+          ansible.builtin.shell: |
+            set -euo pipefail
+            mount_path="{{ nfs_failure_mount_path }}"
+            if ! mountpoint -q "${mount_path}"; then
+              mount "${mount_path}" || mount -a
+            fi
+            mountpoint -q "${mount_path}"
+            echo "recovery_mount_state=mounted"
+            findmnt --target "${mount_path}" --output SOURCE,TARGET,FSTYPE,OPTIONS --noheadings || true
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ nfs_failure_app_host }}"
+          register: nfs_failure_remount_result
+          changed_when: true
+          failed_when: false
+
+    - name: Extract outage work order values
+      ansible.builtin.set_fact:
+        nfs_failure_outage_work_order_id: "{{ nfs_failure_outage_api.stdout | regex_search('outage_work_order_id=([^\n]+)', '\\1') | first }}"
+        nfs_failure_outage_evidence_http_code: "{{ nfs_failure_outage_api.stdout | regex_search('outage_evidence_http_code=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert NFS outage produced expected file-storage impact
+      ansible.builtin.assert:
+        that:
+          - nfs_failure_unmount_result.stdout is search('outage_mount_state=not_mounted')
+          - nfs_failure_outage_api.stdout is search('outage_storage_ready=false')
+          - nfs_failure_outage_api.stdout is search('outage_work_order_http_code=200')
+          - nfs_failure_outage_work_order_id != 'unknown'
+          - nfs_failure_outage_evidence_http_code is not match('^2')
+          - nfs_failure_remount_result.stdout is search('recovery_mount_state=mounted')
+        fail_msg: "NFS mount failure did not produce the expected storage-only impact and recovery signals."
+
+    - name: Validate recovered evidence creation and consistency through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ nfs_failure_result_dir }}"
+        base_url="{{ nfs_failure_base_url }}"
+        request_prefix="{{ nfs_failure_request_prefix }}"
+        work_order_id="{{ nfs_failure_outage_work_order_id }}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-recovery-storage" \
+          "${base_url}/api/failure-lab/file-storage-check" \
+          > "${result_dir}/recovery-file-storage-check.json"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-recovery-create-evidence" \
+          -X POST "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${result_dir}/recovery-evidence-create.json"
+
+        evidence_id=$(python3 -c "import json; print(json.load(open('${result_dir}/recovery-evidence-create.json'))['data']['id'])")
+        storage_path=$(python3 -c "import json; print(json.load(open('${result_dir}/recovery-evidence-create.json'))['data']['storagePath'])")
+        expected_size=$(python3 -c "import json; print(json.load(open('${result_dir}/recovery-evidence-create.json'))['data']['sizeBytes'])")
+        expected_sha256=$(python3 -c "import json; print(json.load(open('${result_dir}/recovery-evidence-create.json'))['data']['sha256'])")
+        create_consistent=$(python3 -c "import json; print(str(json.load(open('${result_dir}/recovery-evidence-create.json'))['consistency']['consistent']).lower())")
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-recovery-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${result_dir}/recovery-evidence-consistency.json"
+
+        consistency_status=$(python3 -c "import json; print(json.load(open('${result_dir}/recovery-evidence-consistency.json'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${result_dir}/recovery-evidence-consistency.json'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${result_dir}/recovery-evidence-consistency.json'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${result_dir}/recovery-evidence-consistency.json'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${result_dir}/recovery-evidence-consistency.json'))['consistency']['checksumMatches']).lower())")
+
+        cat <<EOF
+        recovery_work_order_id=${work_order_id}
+        recovery_evidence_id=${evidence_id}
+        recovery_storage_path=${storage_path}
+        recovery_expected_size_bytes=${expected_size}
+        recovery_expected_sha256=${expected_sha256}
+        recovery_create_consistent=${create_consistent}
+        recovery_consistency_status=${consistency_status}
+        recovery_consistent=${consistent}
+        recovery_file_exists=${file_exists}
+        recovery_size_matches=${size_matches}
+        recovery_checksum_matches=${checksum_matches}
+        EOF
+
+        test "${create_consistent}" = "true"
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+      args:
+        executable: /bin/bash
+      register: nfs_failure_recovery_api
+      changed_when: true
+
+    - name: Extract recovery evidence values
+      ansible.builtin.set_fact:
+        nfs_failure_recovery_work_order_id: "{{ nfs_failure_recovery_api.stdout | regex_search('recovery_work_order_id=([^\n]+)', '\\1') | first }}"
+        nfs_failure_recovery_evidence_id: "{{ nfs_failure_recovery_api.stdout | regex_search('recovery_evidence_id=([^\n]+)', '\\1') | first }}"
+        nfs_failure_recovery_storage_path: "{{ nfs_failure_recovery_api.stdout | regex_search('recovery_storage_path=([^\n]+)', '\\1') | first }}"
+        nfs_failure_recovery_expected_size_bytes: "{{ nfs_failure_recovery_api.stdout | regex_search('recovery_expected_size_bytes=([^\n]+)', '\\1') | first }}"
+        nfs_failure_recovery_expected_sha256: "{{ nfs_failure_recovery_api.stdout | regex_search('recovery_expected_sha256=([^\n]+)', '\\1') | first }}"
+
+    - name: Verify recovered NFS object directly on storage node
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ nfs_failure_export_root }}/{{ nfs_failure_recovery_storage_path }}"
+        test -f "${file}"
+        size=$(stat -c '%s' "${file}")
+        sha=$(sha256sum "${file}" | awk '{print $1}')
+        echo "recovery_file=${file}"
+        echo "recovery_size=${size}"
+        echo "recovery_sha256=${sha}"
+        test "${size}" = "{{ nfs_failure_recovery_expected_size_bytes }}"
+        test "${sha}" = "{{ nfs_failure_recovery_expected_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ nfs_failure_storage_host }}"
+      register: nfs_failure_recovery_nfs_object
+      changed_when: false
+
+    - name: Read recent Nginx log evidence for NFS failure validation
+      ansible.builtin.shell: "grep '{{ nfs_failure_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 30 || true"
+      register: nfs_failure_nginx_log
+      changed_when: false
+
+    - name: Read recent app journald evidence for NFS failure validation
+      ansible.builtin.command: "journalctl -u ops-sample-service --since '-30 min' --no-pager"
+      delegate_to: "{{ nfs_failure_app_host }}"
+      register: nfs_failure_app_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Write NFS mount failure validation report
+      ansible.builtin.copy:
+        dest: "{{ nfs_failure_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          inventory_hostname={{ inventory_hostname }}
+          validation=nfs-mount-failure-validation
+          request_prefix={{ nfs_failure_request_prefix }}
+          base_url={{ nfs_failure_base_url }}
+          app_host={{ nfs_failure_app_host }}
+          storage_host={{ nfs_failure_storage_host }}
+          mount_path={{ nfs_failure_mount_path }}
+          export_root={{ nfs_failure_export_root }}
+
+          [baseline]
+          {{ nfs_failure_baseline_http.stdout | default('n/a') }}
+          {{ nfs_failure_baseline_mount.stdout | default('n/a') }}
+
+          [outage]
+          {{ nfs_failure_unmount_result.stdout | default('n/a') }}
+          {{ nfs_failure_outage_api.stdout | default('n/a') }}
+          outage_interpretation=work-order DB path remained available while evidence-file creation failed because app-side file storage was not ready
+
+          [recovery]
+          {{ nfs_failure_remount_result.stdout | default('n/a') }}
+          {{ nfs_failure_recovery_api.stdout | default('n/a') }}
+          {{ nfs_failure_recovery_nfs_object.stdout | default('n/a') }}
+          recovery_status=validated
+
+          [nginx_access_log]
+          {{ nfs_failure_nginx_log.stdout | default('n/a') }}
+
+          [app_journald]
+          {{ (nfs_failure_app_journal.stdout_lines | default([]) | select('search', nfs_failure_request_prefix) | list | join('\n')) or 'n/a' }}
+
+          [interpretation]
+          supported=bounded evidence that app-side NFS mount loss affects evidence-file creation while DB-backed work-order creation remains available, and remount restores file evidence consistency
+          unsupported=production storage HA, automatic failover, NFS performance tuning, production chaos engineering
+
+    - name: Display NFS mount failure validation report
+      ansible.builtin.command: "cat {{ nfs_failure_report_file }}"
+      register: nfs_failure_report
+      changed_when: false
+
+    - name: Show NFS mount failure validation report
+      ansible.builtin.debug:
+        var: nfs_failure_report.stdout_lines
