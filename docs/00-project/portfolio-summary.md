@@ -31,7 +31,7 @@ What the service does:
 PostgreSQL은 작업 요청, 상태 이력, 감사 로그, 파일 metadata를 저장한다.
 NFS/file storage는 실제 증빙 파일 object를 저장한다.
 Consistency API는 DB metadata와 file object의 크기·SHA-256 일치를 확인한다.
-Failure-lab endpoints는 WEB/WAS 지연, DB 지연, file storage 상태, upload limit을 관찰하게 한다.
+Failure-lab endpoints는 WEB/WAS 지연, DB 지연, DB connection hold, HikariCP pool state, WAS runtime, file storage 상태, upload limit을 관찰하게 한다.
 ```
 
 Boundary:
@@ -52,10 +52,11 @@ It demonstrates that the operator can:
 2. Configure the tiers with repeatable Terraform and Ansible workflows.
 3. Validate normal request paths through Nginx, WAS, DB, and NFS-backed file storage.
 4. Reproduce failures and identify which tier should be inspected first.
-5. Use logs, service state, metrics, checksums, and API responses as evidence.
-6. Create backup artifacts and prove recovery in a separate restore-lab environment.
-7. Keep application features small while making the operated service explainable.
-8. Document supported claims without overclaiming production maturity.
+5. Use logs, service state, metrics, checksums, HTTP status, timing, and API responses as evidence.
+6. Distinguish embedded Tomcat request-thread pressure from HikariCP DB connection-pool pressure.
+7. Create backup artifacts and prove recovery in a separate restore-lab environment.
+8. Keep application features small while making the operated service explainable.
+9. Document supported claims without overclaiming production maturity.
 ```
 
 ## Main runtime topology
@@ -82,7 +83,7 @@ It demonstrates that the operator can:
 Main request and operations path:
 
 ```text
-operator -> nginx-01:443 -> app-01:8080 -> db-primary-01:5432
+operator -> nginx-01:443 -> app-01 embedded Tomcat -> HikariCP -> db-primary-01:5432
                                  |
                                  -> nfs-01:/srv/ops-sample/files
 
@@ -99,7 +100,7 @@ Validated with runtime evidence:
 
 ```text
 Nginx reverse proxy
-Spring Boot/Tomcat app service
+Spring Boot embedded Tomcat app service
 PostgreSQL DB connection
 health/readiness distinction
 Nginx access log and upstream evidence
@@ -146,7 +147,42 @@ health vs readiness distinction during DB service impact
 service recovery verification after controlled incident
 ```
 
-### 5. Backup artifact creation
+### 5. Connection pressure validation
+
+Validated with bounded lab runtime evidence:
+
+```text
+embedded Tomcat request-thread pressure caused delayed but successful DB-backed summary response
+HikariCP connection-pool pressure caused DB-backed request failure while PostgreSQL stayed active
+Nginx access log, app journald, HikariCP state, PostgreSQL pg_stat_activity, and HTTP timing/status were correlated
+```
+
+Representative evidence:
+
+```text
+baseline_tomcat_max_threads=4
+baseline_hikari_max_pool_size=2
+was_summary_during_http_code=200
+was_summary_during_time_total=9.071659
+db_summary_during_http_code=503
+db_pool_active_connections=2
+db_pool_idle_connections=0
+PostgreSQL state=active, wait_event=PgSleep, query=select pg_sleep($1)
+```
+
+Supported interpretation:
+
+```text
+The project can distinguish a delayed API caused by WAS request-thread pressure from a failed DB-backed API caused by WAS-side DB connection-pool exhaustion.
+```
+
+Boundary:
+
+```text
+This is bounded lab evidence. It is not production load testing, capacity sizing, or external Tomcat/WAR operation.
+```
+
+### 6. Backup artifact creation
 
 Validated with runtime evidence:
 
@@ -164,7 +200,7 @@ Backup artifact creation alone is not a recovery claim.
 Recovery was proven separately in restore-lab.
 ```
 
-### 6. Restore-lab recovery
+### 7. Restore-lab recovery
 
 Validated with runtime evidence:
 
@@ -183,7 +219,7 @@ Supported claim:
 Restore-lab DB/file/API recovery validation succeeded.
 ```
 
-### 7. Observability and incident diagnosis
+### 8. Observability and incident diagnosis
 
 Validated with runtime evidence:
 
@@ -216,6 +252,7 @@ docs/05-incident-reports/upload-limit-incident-report.md
 docs/05-incident-reports/latency-diagnosis-incident-report.md
 docs/05-incident-reports/db-web-impact-incident-report.md
 docs/05-incident-reports/restore-lab-recovery-incident-report.md
+docs/05-incident-reports/connection-pressure-incident-report.md
 ```
 
 Recommended interview sequence:
@@ -225,7 +262,8 @@ Recommended interview sequence:
 2. Explain upload-limit diagnosis as WEB/WAS/DB/NFS separation.
 3. Explain latency diagnosis as WAS-side delay vs DB-backed delay.
 4. Explain DB web-impact as health vs readiness and dependency failure.
-5. Explain restore-lab as the difference between backup artifact creation and recovery proof.
+5. Explain connection pressure as embedded Tomcat thread pressure vs HikariCP pool exhaustion.
+6. Explain restore-lab as the difference between backup artifact creation and recovery proof.
 ```
 
 Scenario-specific Q&A:
@@ -254,6 +292,7 @@ docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
 docs/04-evidence/observability-baseline-validation-2026-07-12.md
 docs/04-evidence/observability-metrics-validation-2026-07-12.md
 docs/04-evidence/observability-alert-validation-2026-07-12.md
+docs/04-evidence/connection-pressure-validation-2026-07-13.md
 ```
 
 Service implementation references:
@@ -272,8 +311,9 @@ docs/00-project/ops-sample-service-completion-scope.md
 | Ansible | Configure hosts and reproduce operating procedures | Not an Ansible role showcase |
 | AWS EC2 | VM-style infrastructure substrate | Not an AWS managed architecture project |
 | Nginx | WEB/reverse proxy tier | Not a web tuning-only project |
-| Spring Boot/Tomcat | Runs the lightweight operated service in the WAS tier | Not a Spring Boot feature project |
-| PostgreSQL | DB tier for work-order/event/audit/file metadata | Not HA database engineering |
+| Spring Boot/embedded Tomcat | Runs the lightweight operated service in the WAS tier; exposes request-thread pressure evidence | Not external Tomcat/WAR administration |
+| HikariCP | Exposes WAS-side DB connection-pool pressure evidence | Not production capacity sizing |
+| PostgreSQL | DB tier for work-order/event/audit/file metadata and pg_stat_activity checks | Not HA database engineering |
 | NFS | File storage tier for evidence file objects | Not storage product evaluation |
 | pg_dump/restic | Backup and restore tooling | Not backup product comparison |
 | node_exporter/Prometheus | Metrics evidence for diagnosis | Not a monitoring platform project |
@@ -287,7 +327,8 @@ I built an EC2-based multi-tier operating environment with separated WEB/WAS/DB/
 I validated normal and failure paths with evidence rather than only screenshots.
 I verified DB metadata and NFS file consistency with size and SHA-256 checks.
 I validated work-order and evidence-file web workflows through Nginx, WAS, PostgreSQL, and NFS.
-I tested upload-limit, latency, and DB-impact scenarios as WEB/WAS operating incidents.
+I tested upload-limit, latency, DB-impact, and connection-pressure scenarios as WEB/WAS operating incidents.
+I distinguished embedded Tomcat thread pressure from HikariCP pool exhaustion using HTTP timing/status, Nginx logs, app journald, HikariCP state, and PostgreSQL pg_stat_activity.
 I created backup artifacts and then proved recovery in a separate restore-lab environment.
 I used logs, service state, request-path responses, and Prometheus metrics to narrow a DB service incident.
 ```
@@ -303,7 +344,7 @@ Careful boundary:
 
 ```text
 This is lab runtime validation for an operations portfolio.
-It is not production operations experience, production DR, HA, automatic failover, or RPO/RTO proof.
+It is not production operations experience, production load testing, production DR, HA, automatic failover, SLO/SLA, capacity sizing, external Tomcat administration, or RPO/RTO proof.
 ```
 
 ## Claims that must not be made
@@ -321,12 +362,15 @@ Kubernetes/EKS/GitOps operation
 AWS managed architecture operation
 commercial ITSM implementation
 production disaster recovery
+production load testing
+capacity sizing
+external Tomcat/WAR operation
 RPO/RTO guarantee
 ```
 
 ## Project hardening focus
 
-This project is not complete just because enhanced runtime validation succeeded.
+This project is not complete just because runtime validation succeeded.
 
 Further work should focus on:
 
