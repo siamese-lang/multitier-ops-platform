@@ -1,5 +1,7 @@
 package io.github.siamese_lang.ops;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -27,15 +29,27 @@ public class FailureLabController {
     private final DbSettings dbSettings;
     private final NodeIdentity nodeIdentity;
     private final Path storageRoot;
+    private final int tomcatMaxThreads;
+    private final int tomcatMinSpareThreads;
+    private final int tomcatAcceptCount;
+    private final String tomcatConnectionTimeout;
 
     public FailureLabController(
         DbSettings dbSettings,
         NodeIdentity nodeIdentity,
-        @Value("${ops.evidence-files.root:/mnt/ops-sample/files}") String storageRoot
+        @Value("${ops.evidence-files.root:/mnt/ops-sample/files}") String storageRoot,
+        @Value("${server.tomcat.threads.max:200}") int tomcatMaxThreads,
+        @Value("${server.tomcat.threads.min-spare:10}") int tomcatMinSpareThreads,
+        @Value("${server.tomcat.accept-count:100}") int tomcatAcceptCount,
+        @Value("${server.tomcat.connection-timeout:20s}") String tomcatConnectionTimeout
     ) {
         this.dbSettings = dbSettings;
         this.nodeIdentity = nodeIdentity;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
+        this.tomcatMaxThreads = tomcatMaxThreads;
+        this.tomcatMinSpareThreads = tomcatMinSpareThreads;
+        this.tomcatAcceptCount = tomcatAcceptCount;
+        this.tomcatConnectionTimeout = tomcatConnectionTimeout;
     }
 
     @GetMapping("/ops/failure-lab")
@@ -43,6 +57,7 @@ public class FailureLabController {
         model.addAttribute("node", nodeIdentity.asMap());
         model.addAttribute("storageRoot", storageRoot.toString());
         model.addAttribute("storage", storageState().asMap());
+        model.addAttribute("wasRuntime", wasRuntimeState());
         model.addAttribute("dbPool", dbSettings.poolState());
         model.addAttribute("defaultSleepMs", DEFAULT_SLEEP_MS);
         model.addAttribute("maxSleepMs", MAX_SLEEP_MS);
@@ -68,6 +83,17 @@ public class FailureLabController {
         response.put("boundedMillis", boundedMillis);
         response.put("interrupted", interrupted);
         response.put("thread", Thread.currentThread().getName());
+        response.put("wasRuntime", wasRuntimeState());
+        return response;
+    }
+
+    @ResponseBody
+    @GetMapping("/api/failure-lab/was-runtime")
+    public Map<String, Object> wasRuntime() {
+        long startedAt = System.nanoTime();
+        Map<String, Object> response = baseResponse("ok", "was_runtime", startedAt);
+        response.put("wasRuntime", wasRuntimeState());
+        response.put("dbPool", dbSettings.poolState());
         return response;
     }
 
@@ -132,6 +158,7 @@ public class FailureLabController {
             response.put("requestedValue", requestedValue);
             response.put("boundedMillis", boundedMillis);
             response.put("thread", Thread.currentThread().getName());
+            response.put("wasRuntime", wasRuntimeState());
             response.put("db", Map.of(
                 "url", dbSettings.maskedUrl(),
                 "query", "select pg_sleep(?)"
@@ -144,11 +171,49 @@ public class FailureLabController {
             response.put("requestedValue", requestedValue);
             response.put("boundedMillis", boundedMillis);
             response.put("message", ex.getMessage());
+            response.put("wasRuntime", wasRuntimeState());
             response.put("db", dbSettings.requiredEnvironment());
             response.put("poolBefore", poolBefore);
             response.put("poolAfter", dbSettings.poolState());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(response);
         }
+    }
+
+    private Map<String, Object> wasRuntimeState() {
+        ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
+        Runtime runtime = Runtime.getRuntime();
+
+        Map<String, Object> settings = new LinkedHashMap<>();
+        settings.put("container", "Spring Boot embedded Tomcat");
+        settings.put("maxThreads", tomcatMaxThreads);
+        settings.put("minSpareThreads", tomcatMinSpareThreads);
+        settings.put("acceptCount", tomcatAcceptCount);
+        settings.put("connectionTimeout", tomcatConnectionTimeout);
+        settings.put("source", Map.of(
+            "maxThreads", "SERVER_TOMCAT_THREADS_MAX",
+            "minSpareThreads", "SERVER_TOMCAT_THREADS_MIN_SPARE",
+            "acceptCount", "SERVER_TOMCAT_ACCEPT_COUNT",
+            "connectionTimeout", "SERVER_TOMCAT_CONNECTION_TIMEOUT"
+        ));
+
+        Map<String, Object> threads = new LinkedHashMap<>();
+        threads.put("currentThread", Thread.currentThread().getName());
+        threads.put("liveThreadCount", threadBean.getThreadCount());
+        threads.put("daemonThreadCount", threadBean.getDaemonThreadCount());
+        threads.put("peakThreadCount", threadBean.getPeakThreadCount());
+        threads.put("totalStartedThreadCount", threadBean.getTotalStartedThreadCount());
+
+        Map<String, Object> jvm = new LinkedHashMap<>();
+        jvm.put("availableProcessors", runtime.availableProcessors());
+        jvm.put("freeMemoryBytes", runtime.freeMemory());
+        jvm.put("totalMemoryBytes", runtime.totalMemory());
+        jvm.put("maxMemoryBytes", runtime.maxMemory());
+
+        Map<String, Object> runtimeState = new LinkedHashMap<>();
+        runtimeState.put("settings", settings);
+        runtimeState.put("threads", threads);
+        runtimeState.put("jvm", jvm);
+        return runtimeState;
     }
 
     private Map<String, Object> baseResponse(String status, String scenario, long startedAt) {
