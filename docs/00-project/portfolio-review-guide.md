@@ -27,12 +27,16 @@ Use this order when reviewing the portfolio from the top:
    - incident-report index and evidence boundary
 6. docs/05-incident-reports/*.md
    - operations narratives for each scenario
-7. docs/00-project/interview-explanation-notes.md
-   - 30-second/2-minute explanation and interview Q&A
-8. apps/ops-sample-service/README.md
+7. docs/00-project/interview-incident-qna.md
+   - scenario-specific interview Q&A
+8. docs/00-project/interview-explanation-notes.md
+   - 30-second/2-minute explanation and broader interview Q&A
+9. apps/ops-sample-service/README.md
    - operated service behavior and endpoint details
-9. apps/ops-sample-service/FAILURE_LAB.md
-   - failure-lab endpoint behavior
+10. apps/ops-sample-service/FAILURE_LAB.md
+    - failure-lab endpoint behavior
+11. docs/00-project/deployment-rollback-scenario-plan.md
+    - optional next runtime scenario design; not evidence yet
 ```
 
 ## What each layer is for
@@ -46,6 +50,7 @@ Use this order when reviewing the portfolio from the top:
 | Incident reports | Converts raw runtime validation into operations stories: symptom, impact, checks, evidence, judgment, recovery. |
 | Interview notes | Provides concise spoken explanations and likely Q&A. |
 | Service docs | Explain what the operated workload actually does. |
+| Deployment rollback plan | Defines the next optional runtime scenario without claiming it as completed evidence. |
 
 ## Incident reports to read first
 
@@ -111,11 +116,12 @@ Use this framing:
 
 The next work should improve portfolio explanation quality rather than add unrelated platform features.
 
-Recommended sequence:
+Current sequence:
 
 ```text
-1. Link this guide from README.md.
-2. Link incident reports from portfolio-summary.md.
-3. Refresh interview-explanation-notes.md so it references S1-S4 and incident reports as completed evidence.
-4. Add one optional deployment/rollback incident scenario only if another runtime window is justified.
+1. README.md links to the portfolio review guide and incident documents.
+2. portfolio-summary.md links to the incident report layer and interview incident Q&A.
+3. deployment-rollback-scenario-plan.md defines the next optional runtime scenario without claiming evidence.
+4. Next documentation work should refresh interview-explanation-notes.md to remove old pre-validation wording and reference S1-S4 incident reports as completed evidence.
+5. A deployment/rollback runtime window should be opened only if it is still justified after the interview notes are updated.
 ```
