@@ -1,6 +1,6 @@
 # AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
 
-이 프로젝트는 AWS EC2를 VM 환경으로 사용해 WEB/WAS/DB/파일저장소/백업/관측성 계층을 분리 구성하고, 운영 중 발생할 수 있는 장애·성능·복구 상황을 로그·지표·HTTP 응답·DB row·파일 checksum으로 검증하는 운영 포트폴리오입니다.
+이 프로젝트는 AWS EC2를 VM 환경으로 사용해 WEB/WAS/DB/Storage/Backup/Observability 계층을 분리 구성하고, 운영 중 발생할 수 있는 장애·성능·복구 상황을 로그·지표·HTTP 응답·DB row·파일 checksum으로 검증하는 운영 포트폴리오입니다.
 
 운영 대상 서비스는 `ops-sample-service`입니다. 단순 샘플 API가 아니라 **운영 작업 요청과 증빙 파일을 관리하는 경량 웹 업무 서비스**로 보강했습니다. 작업 요청 목록·상세·등록·상태 변경, 증빙 파일 업로드·다운로드, 상태 이력, 감사 로그, DB/file consistency, WEB/WAS failure-lab 경로를 포함합니다.
 
@@ -9,7 +9,7 @@
 ## 한 줄 정의
 
 ```text
-작업 요청·증빙 파일 관리형 경량 웹 서비스를 EC2 VM 기반 WEB/WAS/DB/파일저장소/백업/관측성 계층 위에 구성하고, 장애·성능·복구 문제를 로그와 지표로 분석하는 운영 포트폴리오
+작업 요청·증빙 파일 관리형 경량 웹 서비스를 EC2 VM 기반 WEB/WAS/DB/Storage/Backup/Observability 계층 위에 구성하고, 장애·성능·복구 문제를 로그와 지표로 분석하는 운영 포트폴리오
 ```
 
 ## 운영 대상 서비스
@@ -69,6 +69,27 @@ WEB/WAS/DB/Storage/Backup/Observability 구조를 나누어 이해하고,
 서비스 장애 상황에서 확인해야 할 지점과 복구 절차를 근거 기반으로 설명할 수 있다.
 ```
 
+## 최종 runtime validation 상태
+
+2026-07-13 기준 AWS runtime validation은 완료했고, evidence 수집 후 lab 리소스는 삭제했습니다.
+
+```text
+lab-full-ops AWS runtime validation: completed
+connection pressure validation: completed
+bad deployment rollback validation: completed
+NFS mount failure/recovery validation: completed
+Nginx config rollback validation: completed
+AWS lab cleanup/destroy: completed
+```
+
+최종 요약 문서:
+
+```text
+docs/04-evidence/final-runtime-validation-2026-07-13.md
+```
+
+Raw runtime evidence는 저장소에 커밋하지 않고 로컬 evidence archive에 보관합니다.
+
 ## 현재 완료된 운영 evidence
 
 ```text
@@ -81,35 +102,13 @@ Phase 4A. logs/service/request-path observability evidence: completed
 Phase 4B. node_exporter + Prometheus scrape metrics evidence: completed
 Phase 4C. metric-based DB service incident diagnosis: completed
 Phase 4D. Prometheus DB service alert-rule evaluation evidence: completed
-Phase 5E. enhanced service runtime validation: completed as first enhanced validation pass
+Phase 5E. enhanced service runtime validation: completed
 Phase 6A. bounded WEB/WAS/DB connection-pressure validation: completed
+Phase 6B. bad WAS artifact deployment and rollback validation: completed
+Phase 6C. app-side NFS mount failure and recovery validation: completed
+Phase 6D. Nginx bad config detection and rollback validation: completed
+Final cleanup. lab-full-ops AWS resources destroyed after evidence collection: completed
 ```
-
-Phase 5E에서 검증한 범위:
-
-```text
-S1 enhanced service workflow validation: completed
-S2 upload-limit incident validation: completed
-S3 latency scenario validation: completed
-S4 DB web-impact incident validation: completed
-Backup baseline: completed
-Restore-lab DB/file restore baseline: completed
-Restore-lab HTTP/API consistency validation: completed
-Source lab destroy: completed
-Restore lab destroy: completed
-```
-
-Phase 6A에서 검증한 범위:
-
-```text
-WAS request-thread pressure: delayed but successful DB-backed summary response
-HikariCP connection-pool pressure: DB-backed request failure while PostgreSQL stayed active
-Cross-tier evidence: Nginx access log, app journald, HikariCP pool state, PostgreSQL pg_stat_activity, HTTP status/timing metrics
-Runtime status: lab-full-ops EC2 environment intentionally retained for follow-up AWS validation work
-Cost control: NAT Gateway disabled after package installation and validation
-```
-
-이 결과는 프로젝트 종료를 의미하지 않습니다. 현재 단계는 **runtime evidence를 확보한 뒤, 인프라/WAS 운영 면접에서 설명 가능한 incident report와 evidence map으로 포트폴리오 완성도를 높이는 단계**입니다.
 
 ## 검증한 운영 시나리오
 
@@ -136,6 +135,11 @@ Runtime evidence로 검증한 항목:
 18. 보강된 서비스 모델 기준 restore-lab 복구 검증
 19. embedded Tomcat request-thread pressure와 DB-backed API 지연 구분
 20. HikariCP connection-pool pressure와 PostgreSQL active 상태 구분
+21. 잘못된 WAS artifact 배포, systemd/health 실패 확인, jar/env rollback 검증
+22. app-side NFS mount 장애 중 DB-backed 업무 생성과 file-storage 의존 기능 실패 분리 검증
+23. NFS remount 후 DB metadata/NFS file object/size/SHA-256 consistency 복구 검증
+24. 잘못된 Nginx config candidate를 nginx -t로 차단하고 원본 config restore/reload 검증
+25. AWS runtime lab destroy 완료
 ```
 
 ## 대표 토폴로지
@@ -175,15 +179,15 @@ preserved backup artifact
 
 ```text
 1. README.md
-   - project identity, completed evidence, current validation boundary
+   - project identity, completed evidence, validation boundary
 2. docs/00-project/portfolio-review-guide.md
    - recommended review order for this operations portfolio
-3. docs/00-project/current-state-after-enhanced-runtime-validation.md
-   - current completed validation state
-4. docs/00-project/portfolio-summary.md
+3. docs/00-project/portfolio-summary.md
    - recruiter/interviewer-facing summary
-5. docs/04-evidence/evidence-index.md
+4. docs/04-evidence/evidence-index.md
    - claim-to-evidence map
+5. docs/04-evidence/final-runtime-validation-2026-07-13.md
+   - final runtime validation and cleanup summary
 6. docs/05-incident-reports/README.md
    - incident-report index and evidence boundary
 7. docs/05-incident-reports/*.md
@@ -221,7 +225,7 @@ docs/04-evidence/observability-baseline-validation-2026-07-12.md
 docs/04-evidence/observability-metrics-validation-2026-07-12.md
 docs/04-evidence/observability-alert-validation-2026-07-12.md
 docs/04-evidence/connection-pressure-validation-2026-07-13.md
-docs/00-project/current-state-after-enhanced-runtime-validation.md
+docs/04-evidence/final-runtime-validation-2026-07-13.md
 ```
 
 면접 설명용 문서:
@@ -246,11 +250,11 @@ docs/00-project/interview-explanation-notes.md
 | AWS EC2 | VM 기반 운영환경 제공 | 관리형 서비스 중심 프로젝트가 아님 |
 | Terraform | 실험 환경 생성·삭제 자동화 | 프로젝트 주제가 아니라 supporting tool |
 | Ansible | 서버 설정과 운영 절차 재현 자동화 | role 자체보다 운영 설정 일관성이 중요 |
-| Nginx | WEB/reverse proxy 계층 | upstream, timeout, access/error log 분석 대상 |
+| Nginx | WEB/reverse proxy 계층 | config test, rollback, upstream, timeout, access/error log 분석 대상 |
 | Spring Boot/embedded Tomcat | WAS 계층, 경량 업무 서비스 실행, request-thread pressure 관찰 | 외부 Tomcat/WAR 운영 경험으로 과장하지 않음 |
 | HikariCP | WAS-side DB connection pool pressure 관찰 | production capacity sizing 근거가 아님 |
 | PostgreSQL | 작업 요청·이력·파일 metadata 저장, pg_stat_activity 확인 | connection, metadata, backup, restore, service-state 분석 대상 |
-| NFS/filesystem | 증빙 파일 object 저장 | DB metadata와 file object consistency 검증 대상 |
+| NFS/filesystem | 증빙 파일 object 저장 | DB metadata와 file object consistency, mount failure/recovery 검증 대상 |
 | pg_dump/restic | 백업·복구 검증 도구 | backup creation과 restore validation을 구분 |
 | node_exporter/Prometheus | 장애 분석용 지표 evidence | dashboard 자체가 목적이 아님 |
 | OpenKoda | 초기 workload 후보 및 Phase 0 smoke-test 맥락 | 프로젝트 주제가 아님 |
@@ -268,9 +272,13 @@ DB metadata와 NFS file object consistency를 검증했다.
 업로드 제한, 지연, DB 장애 영향을 서비스 기능과 연결해 확인했다.
 embedded Tomcat request-thread pressure와 HikariCP connection-pool pressure를 구분했다.
 PostgreSQL이 active인 상태에서도 WAS-side DB connection pool 고갈로 DB-backed API가 실패할 수 있음을 확인했다.
+잘못된 WAS artifact 배포를 systemd/health/version/readiness/summary 기준으로 rollback 검증했다.
+app-side NFS mount 장애가 evidence-file 생성에 미치는 영향과 remount 후 consistency 복구를 검증했다.
+잘못된 Nginx config candidate를 nginx -t로 차단하고 원본 config 복구 후 reload와 proxied service 정상화를 검증했다.
 로그·서비스 상태·request path를 통해 장애 원인을 계층별로 좁혔다.
 Prometheus metrics로 DB host reachability와 PostgreSQL service failure를 구분했다.
 Prometheus rule evaluation으로 PostgreSQL service inactivity를 감지했다.
+검증 후 AWS lab 리소스를 삭제했다.
 ```
 
 Repository implementation 기준으로 주장할 수 있는 것:
@@ -306,6 +314,11 @@ production load testing
 capacity sizing
 external Tomcat/WAR 운영 경험
 commercial ITSM 구현 경험
+blue-green/canary deployment
+zero-downtime release guarantee
+production storage HA
+production DR
+RPO/RTO guarantee
 ```
 
 ## Runtime validation policy
@@ -322,18 +335,16 @@ AWS runtime validation은 필요할 때만 수행합니다. 작은 PR마다 Terr
 추가 운영 시나리오
 -> 명시적 runtime validation window
 -> evidence 수집
--> 후속 AWS 작업이 있으면 EC2 lab 유지 가능
 -> 비용 리스크가 큰 NAT Gateway는 검증 후 비활성화
 -> 후속 작업이 없을 때 전체 destroy
 ```
 
-NAT Gateway를 켠 검증 창은 비용 리스크가 있으므로, 패키지 설치와 evidence 수집이 끝나면 NAT Gateway를 비활성화합니다. 후속 AWS 검증이 예정되어 있으면 EC2 lab은 유지하고, 후속 작업이 없을 때 전체 destroy합니다.
+2026-07-13 최종 runtime validation window는 evidence 수집 후 destroy까지 완료했습니다. 따라서 현재 기본 방향은 **No new AWS runtime by default**입니다.
 
 ## 현재 다음 작업
 
 ```text
 No new AWS runtime by default.
 No more observability feature expansion by default.
-Focus on portfolio hardening: evidence-index 정리 -> incident report 작성 -> interview explanation 보강.
-추가 runtime이 필요하다면 VM/systemd 기반 배포·롤백 시나리오 1회만 계획한다.
+Focus on portfolio hardening: evidence-index 정리 -> incident report 보강 -> interview explanation 보강 -> 제출용 포트폴리오 문구 정리.
 ```
