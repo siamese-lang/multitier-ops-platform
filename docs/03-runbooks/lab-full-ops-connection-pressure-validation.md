@@ -44,25 +44,42 @@ GET /version
 GET /api/work-orders/summary
 ```
 
-## Suggested pressure deployment values
+## Runtime sequence
 
-For a bounded validation, deploy the app with intentionally small Tomcat and HikariCP settings.
+Run the scenario as a controlled validation window:
 
-Example:
+```text
+1. Deploy bounded pressure profile
+2. Run connection pressure validation
+3. Archive evidence
+4. Restore normal app runtime profile
+```
+
+The restore step is part of the operating procedure. Do not leave `ops-sample-service` running with the bounded pressure profile after evidence collection.
+
+## Step 1. Deploy bounded pressure profile
+
+Use the wrapper playbook so the intended Tomcat/HikariCP values are not scattered across manual `-e` flags:
 
 ```bash
 cd /mnt/c/Project/test/multitier-ops-platform/infra/ansible
 
 ansible-playbook -i inventories/lab-full-ops/hosts.yml \
-  playbooks/lab-full-min-ops-sample-service.yml \
-  -e 'ops_db_password=<supply-from-ignored-source>' \
-  -e 'ops_tomcat_threads_max=4' \
-  -e 'ops_tomcat_threads_min_spare=2' \
-  -e 'ops_tomcat_accept_count=8' \
-  -e 'ops_tomcat_connection_timeout=20s' \
-  -e 'ops_hikari_max_pool_size=2' \
-  -e 'ops_hikari_min_idle=1' \
-  -e 'ops_hikari_connection_timeout_ms=3000'
+  playbooks/lab-full-ops-connection-pressure-bounded-app-deploy.yml \
+  -e 'ops_db_password=<supply-from-ignored-source>'
+```
+
+This wrapper sets:
+
+```text
+ops_app_deployment_slot=pressure
+ops_tomcat_threads_max=4
+ops_tomcat_threads_min_spare=2
+ops_tomcat_accept_count=8
+ops_tomcat_connection_timeout=20s
+ops_hikari_max_pool_size=2
+ops_hikari_min_idle=1
+ops_hikari_connection_timeout_ms=3000
 ```
 
 These values are intentionally small. They are not recommended production settings.
@@ -89,7 +106,7 @@ ansible-playbook -i inventories/lab-full-ops/hosts.yml \
 
 Do not disable the guardrail for the v1.0 evidence run unless the report is clearly marked as baseline-only.
 
-## Validation command
+## Step 2. Run validation
 
 Run the connection pressure playbook from the same Ansible environment:
 
@@ -109,7 +126,7 @@ ansible-playbook -i inventories/lab-full-ops/hosts.yml \
   -e 'connection_pressure_db_hold_seconds=10'
 ```
 
-## Evidence collected
+## Step 3. Archive evidence
 
 The playbook writes files under:
 
@@ -122,6 +139,33 @@ Main report:
 ```text
 /tmp/multitier-ops-platform/lab-full-ops-connection-pressure-nginx-01.txt
 ```
+
+Before restoring or destroying anything, copy the report and result directory into the local evidence archive for the validation window.
+
+## Step 4. Restore normal app runtime profile
+
+After the evidence is copied, restore the normal runtime profile:
+
+```bash
+ansible-playbook -i inventories/lab-full-ops/hosts.yml \
+  playbooks/lab-full-ops-connection-pressure-restore-app-defaults.yml \
+  -e 'ops_db_password=<supply-from-ignored-source>'
+```
+
+This wrapper restores:
+
+```text
+ops_app_deployment_slot=stable
+ops_tomcat_threads_max=200
+ops_tomcat_threads_min_spare=10
+ops_tomcat_accept_count=100
+ops_tomcat_connection_timeout=20s
+ops_hikari_max_pool_size=10
+ops_hikari_min_idle=1
+ops_hikari_connection_timeout_ms=30000
+```
+
+## Evidence collected
 
 Evidence categories:
 
@@ -146,7 +190,7 @@ HikariCP pool pressure:
 Cross-tier evidence:
 - Nginx access log lines with request IDs
 - app journald lines with request IDs
-- PostgreSQL pg_stat_activity sample
+- PostgreSQL pg_stat_activity sample during DB pressure
 ```
 
 ## Supported claim
@@ -184,9 +228,11 @@ This scenario is complete when the report contains:
 6. DB hold concurrency results
 7. normal work-order API behavior during DB pool pressure
 8. HikariCP active/idle/awaiting state
-9. PostgreSQL pg_stat_activity sample
+9. PostgreSQL pg_stat_activity sample during DB pressure
 10. Nginx request-id log sample
 11. app journald request-id log sample
+12. evidence archived before cleanup
+13. app runtime restored to stable/default profile
 ```
 
 After these are collected, do not keep increasing concurrency or adding load-test tooling for v1.0.
