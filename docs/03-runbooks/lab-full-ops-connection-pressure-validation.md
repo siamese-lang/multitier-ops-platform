@@ -67,6 +67,28 @@ ansible-playbook -i inventories/lab-full-ops/hosts.yml \
 
 These values are intentionally small. They are not recommended production settings.
 
+## Preflight behavior
+
+By default, the validation playbook enforces that pressure settings are actually active before running the scenario:
+
+```text
+connection_pressure_enforce_bounded_settings=true
+connection_pressure_max_allowed_tomcat_threads=4
+connection_pressure_max_allowed_hikari_pool_size=2
+```
+
+If baseline evidence shows larger settings, the playbook stops before running the pressure steps. This prevents producing a weak report from a normal-sized deployment.
+
+For a baseline-only diagnostic run, you may explicitly disable the guardrail:
+
+```bash
+ansible-playbook -i inventories/lab-full-ops/hosts.yml \
+  playbooks/lab-full-ops-connection-pressure-validation.yml \
+  -e 'connection_pressure_enforce_bounded_settings=false'
+```
+
+Do not disable the guardrail for the v1.0 evidence run unless the report is clearly marked as baseline-only.
+
 ## Validation command
 
 Run the connection pressure playbook from the same Ansible environment:
@@ -109,6 +131,7 @@ baseline:
 - /api/failure-lab/was-runtime
 - /api/failure-lab/db-pool
 - /api/work-orders/summary
+- preflight Tomcat/HikariCP setting check
 
 WAS thread pressure:
 - concurrent /api/failure-lab/sleep requests
@@ -155,14 +178,15 @@ This scenario is complete when the report contains:
 ```text
 1. baseline Tomcat and HikariCP settings
 2. baseline work-order summary response
-3. WAS sleep concurrency results
-4. normal work-order API behavior during WAS pressure
-5. DB hold concurrency results
-6. normal work-order API behavior during DB pool pressure
-7. HikariCP active/idle/awaiting state
-8. PostgreSQL pg_stat_activity sample
-9. Nginx request-id log sample
-10. app journald request-id log sample
+3. successful bounded setting preflight
+4. WAS sleep concurrency results
+5. normal work-order API behavior during WAS pressure
+6. DB hold concurrency results
+7. normal work-order API behavior during DB pool pressure
+8. HikariCP active/idle/awaiting state
+9. PostgreSQL pg_stat_activity sample
+10. Nginx request-id log sample
+11. app journald request-id log sample
 ```
 
 After these are collected, do not keep increasing concurrency or adding load-test tooling for v1.0.
