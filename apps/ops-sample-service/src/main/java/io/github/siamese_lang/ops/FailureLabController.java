@@ -43,6 +43,7 @@ public class FailureLabController {
         model.addAttribute("node", nodeIdentity.asMap());
         model.addAttribute("storageRoot", storageRoot.toString());
         model.addAttribute("storage", storageState().asMap());
+        model.addAttribute("dbPool", dbSettings.poolState());
         model.addAttribute("defaultSleepMs", DEFAULT_SLEEP_MS);
         model.addAttribute("maxSleepMs", MAX_SLEEP_MS);
         return "failure-lab";
@@ -74,29 +75,24 @@ public class FailureLabController {
     @GetMapping("/api/failure-lab/db-sleep")
     public ResponseEntity<Map<String, Object>> dbSleep(@RequestParam(defaultValue = "1000") int millis) {
         int boundedMillis = boundedMillis(millis);
+        return executeDbSleep("db_sleep", millis, boundedMillis);
+    }
+
+    @ResponseBody
+    @GetMapping("/api/failure-lab/db-hold")
+    public ResponseEntity<Map<String, Object>> dbHold(@RequestParam(defaultValue = "10") int seconds) {
+        int boundedSeconds = Math.max(0, Math.min(seconds, MAX_SLEEP_MS / 1_000));
+        return executeDbSleep("db_connection_hold", seconds, boundedSeconds * 1_000);
+    }
+
+    @ResponseBody
+    @GetMapping("/api/failure-lab/db-pool")
+    public Map<String, Object> dbPool() {
         long startedAt = System.nanoTime();
-
-        try (Connection connection = dbSettings.openConnection();
-             PreparedStatement statement = connection.prepareStatement("select pg_sleep(?)")) {
-            statement.setDouble(1, boundedMillis / 1000.0d);
-            statement.execute();
-
-            Map<String, Object> response = baseResponse("ok", "db_sleep", startedAt);
-            response.put("requestedMillis", millis);
-            response.put("boundedMillis", boundedMillis);
-            response.put("db", Map.of(
-                "url", dbSettings.maskedUrl(),
-                "query", "select pg_sleep(?)"
-            ));
-            return ResponseEntity.ok(response);
-        } catch (IllegalStateException | SQLException ex) {
-            Map<String, Object> response = baseResponse("db-unavailable", "db_sleep", startedAt);
-            response.put("requestedMillis", millis);
-            response.put("boundedMillis", boundedMillis);
-            response.put("message", ex.getMessage());
-            response.put("db", dbSettings.requiredEnvironment());
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(response);
-        }
+        Map<String, Object> response = baseResponse("ok", "db_pool", startedAt);
+        response.put("db", Map.of("url", dbSettings.maskedUrl()));
+        response.put("pool", dbSettings.poolState());
+        return response;
     }
 
     @ResponseBody
@@ -121,6 +117,38 @@ public class FailureLabController {
         response.put("maxRequestSize", maxRequestSize);
         response.put("relatedFlow", "POST /work-orders/{id}/evidence");
         return response;
+    }
+
+    private ResponseEntity<Map<String, Object>> executeDbSleep(String scenario, int requestedValue, int boundedMillis) {
+        long startedAt = System.nanoTime();
+        Map<String, Object> poolBefore = dbSettings.poolState();
+
+        try (Connection connection = dbSettings.openConnection();
+             PreparedStatement statement = connection.prepareStatement("select pg_sleep(?)")) {
+            statement.setDouble(1, boundedMillis / 1000.0d);
+            statement.execute();
+
+            Map<String, Object> response = baseResponse("ok", scenario, startedAt);
+            response.put("requestedValue", requestedValue);
+            response.put("boundedMillis", boundedMillis);
+            response.put("thread", Thread.currentThread().getName());
+            response.put("db", Map.of(
+                "url", dbSettings.maskedUrl(),
+                "query", "select pg_sleep(?)"
+            ));
+            response.put("poolBefore", poolBefore);
+            response.put("poolAfter", dbSettings.poolState());
+            return ResponseEntity.ok(response);
+        } catch (IllegalStateException | SQLException ex) {
+            Map<String, Object> response = baseResponse("db-unavailable", scenario, startedAt);
+            response.put("requestedValue", requestedValue);
+            response.put("boundedMillis", boundedMillis);
+            response.put("message", ex.getMessage());
+            response.put("db", dbSettings.requiredEnvironment());
+            response.put("poolBefore", poolBefore);
+            response.put("poolAfter", dbSettings.poolState());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(response);
+        }
     }
 
     private Map<String, Object> baseResponse(String status, String scenario, long startedAt) {
