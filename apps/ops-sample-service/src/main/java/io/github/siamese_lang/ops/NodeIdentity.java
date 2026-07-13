@@ -17,6 +17,8 @@ public class NodeIdentity {
         node.put("tier", tier());
         node.put("environment", environment());
         node.put("version", version());
+        node.put("deploymentId", deploymentId());
+        node.put("deploymentSlot", deploymentSlot());
         return node;
     }
 
@@ -50,6 +52,14 @@ public class NodeIdentity {
 
     public String version() {
         return env("APP_VERSION", "0.1.0-local");
+    }
+
+    public String deploymentId() {
+        return env("OPS_DEPLOYMENT_ID", "local");
+    }
+
+    public String deploymentSlot() {
+        return env("OPS_DEPLOYMENT_SLOT", "stable");
     }
 
     private static String env(String key, String fallback) {
