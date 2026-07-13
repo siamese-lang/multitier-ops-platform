@@ -44,6 +44,9 @@ ops_app_version: "0.1.0"
 ops_app_environment: lab-full-ops
 ops_app_node_role: app
 ops_app_node_tier: private-was
+ops_app_deployment_id: "{{ ops_app_environment }}-{{ ops_app_version }}-{{ ansible_date_time.epoch | default('manual') }}"
+ops_app_deployment_slot: stable
+ops_app_deployed_at: "{{ ansible_date_time.iso8601 | default('manual') }}"
 
 # Either provide a downloadable artifact URL or provide a local jar under
 # apps/ops-sample-service/target/. GitHub Actions artifacts can be downloaded
@@ -59,6 +62,7 @@ ops_app_required_jar_entries:
   - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderEvidenceRepository.class
   - BOOT-INF/classes/io/github/siamese_lang/ops/WorkOrderWebController.class
   - BOOT-INF/classes/io/github/siamese_lang/ops/FailureLabController.class
+  - BOOT-INF/classes/io/github/siamese_lang/ops/ReleaseInfo.class
 
 # DB connection used by ops-sample-service.
 # db-primary-01 is defined in the lab-full-ops inventory.
@@ -83,6 +87,7 @@ ops_app_expect_db_ready: true
 ops_app_healthcheck_url: "http://127.0.0.1:{{ ops_app_port }}/healthz"
 ops_app_readycheck_url: "http://127.0.0.1:{{ ops_app_port }}/readyz"
 ops_app_node_url: "http://127.0.0.1:{{ ops_app_port }}/node"
+ops_app_version_url: "http://127.0.0.1:{{ ops_app_port }}/version"
 ops_app_work_orders_summary_url: "http://127.0.0.1:{{ ops_app_port }}/api/work-orders/summary"
 
 # Evidence-flow checks are intentionally disabled by default because they need
