@@ -1,0 +1,136 @@
+---
+# Archive and fetch connection-pressure validation evidence from nginx-01.
+#
+# This playbook does not create or modify infrastructure. Run it after
+# lab-full-ops-connection-pressure-validation.yml and before restoring or
+# destroying the lab runtime.
+#
+# By default, the archive is fetched to a local /tmp directory on the Ansible
+# control node. Override CONNECTION_PRESSURE_EVIDENCE_DIR when a different
+# local archive path is required.
+
+- name: Archive and fetch lab-full-ops connection pressure evidence
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    connection_pressure_report_dir: /tmp/multitier-ops-platform
+    connection_pressure_result_dir: "{{ connection_pressure_report_dir }}/lab-full-ops-connection-pressure"
+    connection_pressure_report_file: "{{ connection_pressure_report_dir }}/lab-full-ops-connection-pressure-{{ inventory_hostname }}.txt"
+    connection_pressure_archive_basename: "lab-full-ops-connection-pressure-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short | default('manual') }}"
+    connection_pressure_remote_archive_file: "{{ connection_pressure_report_dir }}/{{ connection_pressure_archive_basename }}.tar.gz"
+    connection_pressure_local_archive_dir: "{{ lookup('env', 'CONNECTION_PRESSURE_EVIDENCE_DIR') | default('/tmp/multitier-ops-platform-evidence/connection-pressure', true) }}"
+
+  pre_tasks:
+    - name: Assert this archive task runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this evidence fetch playbook against nginx-01 through the web inventory group."
+
+    - name: Show evidence archive boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook archives connection-pressure validation evidence from nginx-01."
+          - "It should run after validation and before app default restore or lab cleanup."
+          - "Local destination: {{ connection_pressure_local_archive_dir }}"
+
+  tasks:
+    - name: Check connection pressure result directory exists
+      ansible.builtin.stat:
+        path: "{{ connection_pressure_result_dir }}"
+      register: connection_pressure_result_dir_stat
+
+    - name: Check connection pressure report exists
+      ansible.builtin.stat:
+        path: "{{ connection_pressure_report_file }}"
+      register: connection_pressure_report_file_stat
+
+    - name: Assert connection pressure evidence exists before archive
+      ansible.builtin.assert:
+        that:
+          - connection_pressure_result_dir_stat.stat.exists
+          - connection_pressure_result_dir_stat.stat.isdir
+          - connection_pressure_report_file_stat.stat.exists
+          - connection_pressure_report_file_stat.stat.isreg
+        fail_msg: >-
+          Connection pressure evidence is missing. Expected result directory
+          {{ connection_pressure_result_dir }} and report {{ connection_pressure_report_file }}.
+          Run lab-full-ops-connection-pressure-validation.yml first.
+
+    - name: Write connection pressure archive manifest
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ connection_pressure_result_dir }}"
+        report_file="{{ connection_pressure_report_file }}"
+        manifest="${result_dir}/archive-manifest.txt"
+        checksums="${result_dir}/archive-sha256sums.txt"
+
+        {
+          echo "project={{ project_name | default('multitier-ops-platform') }}"
+          echo "environment={{ environment_name | default('lab-full-ops') }}"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "ansible_host={{ ansible_host | default('n/a') }}"
+          echo "created_at={{ ansible_date_time.iso8601 | default('manual') }}"
+          echo "report_file=${report_file}"
+          echo "result_dir=${result_dir}"
+          echo "archive_file={{ connection_pressure_remote_archive_file }}"
+          echo
+          echo "[files]"
+          find "${result_dir}" -type f -print | sort
+          echo "${report_file}"
+        } > "${manifest}"
+
+        {
+          sha256sum "${report_file}"
+          find "${result_dir}" -type f ! -name 'archive-sha256sums.txt' -print0 | sort -z | xargs -0 sha256sum
+        } > "${checksums}"
+
+        cat "${manifest}"
+      args:
+        executable: /bin/bash
+      register: connection_pressure_archive_manifest
+      changed_when: true
+
+    - name: Create remote connection pressure evidence archive
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ connection_pressure_report_dir }}"
+        tar -czf "{{ connection_pressure_remote_archive_file }}" \
+          "{{ connection_pressure_report_file | basename }}" \
+          "{{ connection_pressure_result_dir | basename }}"
+        sha256sum "{{ connection_pressure_remote_archive_file }}" > "{{ connection_pressure_remote_archive_file }}.sha256"
+        ls -lh "{{ connection_pressure_remote_archive_file }}" "{{ connection_pressure_remote_archive_file }}.sha256"
+      args:
+        executable: /bin/bash
+      register: connection_pressure_remote_archive
+      changed_when: true
+
+    - name: Ensure local connection pressure evidence archive directory exists
+      ansible.builtin.file:
+        path: "{{ connection_pressure_local_archive_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch connection pressure evidence archive
+      ansible.builtin.fetch:
+        src: "{{ connection_pressure_remote_archive_file }}"
+        dest: "{{ connection_pressure_local_archive_dir }}/"
+        flat: true
+
+    - name: Fetch connection pressure evidence archive checksum
+      ansible.builtin.fetch:
+        src: "{{ connection_pressure_remote_archive_file }}.sha256"
+        dest: "{{ connection_pressure_local_archive_dir }}/"
+        flat: true
+
+    - name: Show connection pressure evidence archive result
+      ansible.builtin.debug:
+        msg:
+          - "remote_archive={{ connection_pressure_remote_archive_file }}"
+          - "local_archive={{ connection_pressure_local_archive_dir }}/{{ connection_pressure_remote_archive_file | basename }}"
+          - "local_checksum={{ connection_pressure_local_archive_dir }}/{{ connection_pressure_remote_archive_file | basename }}.sha256"
+          - "Archive this tarball path in the evidence index after runtime validation is interpreted."
