@@ -92,6 +92,7 @@ jobs:
             playbooks/lab-full-ops-deployment-rollback-validation.yml
             playbooks/lab-full-ops-bad-deployment-rollback-validation.yml
             playbooks/lab-full-ops-nfs-mount-failure-validation.yml
+            playbooks/lab-full-ops-nginx-config-rollback-validation.yml
             playbooks/restore-lab-db-file-restore-baseline.yml
             playbooks/restore-lab-http-api-consistency-check.yml
           )
