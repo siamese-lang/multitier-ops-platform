@@ -158,6 +158,10 @@
         mode: "0600"
         content: |
           SERVER_PORT={{ ops_app_port }}
+          SERVER_TOMCAT_THREADS_MAX={{ ops_tomcat_threads_max | default(200) }}
+          SERVER_TOMCAT_THREADS_MIN_SPARE={{ ops_tomcat_threads_min_spare | default(10) }}
+          SERVER_TOMCAT_ACCEPT_COUNT={{ ops_tomcat_accept_count | default(100) }}
+          SERVER_TOMCAT_CONNECTION_TIMEOUT={{ ops_tomcat_connection_timeout | default('20s') }}
           OPS_DB_URL={{ ops_db_url }}
           OPS_DB_USERNAME={{ ops_db_user }}
           OPS_DB_PASSWORD={{ ops_db_password }}
@@ -274,6 +278,10 @@
           deployed_at={{ ops_app_deployed_at | default(ansible_date_time.iso8601) }}
           artifact_sha256={{ ops_app_deployed_jar_stat.stat.checksum | default('unknown') }}
           artifact_source={{ effective_ops_artifact_source }}
+          tomcat_threads_max={{ ops_tomcat_threads_max | default(200) }}
+          tomcat_threads_min_spare={{ ops_tomcat_threads_min_spare | default(10) }}
+          tomcat_accept_count={{ ops_tomcat_accept_count | default(100) }}
+          tomcat_connection_timeout={{ ops_tomcat_connection_timeout | default('20s') }}
           db_host={{ ops_db_host }}
           db_name={{ ops_db_name }}
           db_user={{ ops_db_user }}
