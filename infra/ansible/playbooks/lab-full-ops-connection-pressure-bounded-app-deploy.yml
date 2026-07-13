@@ -1,0 +1,23 @@
+---
+# Deploy ops-sample-service with intentionally small embedded Tomcat and
+# HikariCP settings for the bounded connection-pressure validation window.
+#
+# This playbook does not create infrastructure. It only reuses the existing
+# lab-full-ops app deployment path and must be run against an already prepared
+# lab-full-ops inventory.
+#
+# Required runtime secret:
+#   - ops_db_password supplied from ignored inventory, --extra-vars, or Vault.
+
+- import_playbook: lab-full-min-ops-sample-service.yml
+  vars:
+    ops_app_deployment_slot: pressure
+    ops_tomcat_threads_max: 4
+    ops_tomcat_threads_min_spare: 2
+    ops_tomcat_accept_count: 8
+    ops_tomcat_connection_timeout: 20s
+    ops_hikari_max_pool_size: 2
+    ops_hikari_min_idle: 1
+    ops_hikari_connection_timeout_ms: 3000
+    ops_hikari_idle_timeout_ms: 600000
+    ops_hikari_max_lifetime_ms: 1800000
