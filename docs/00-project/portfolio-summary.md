@@ -205,6 +205,41 @@ Prometheus metrics helped distinguish DB host reachability from DB service depen
 Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
 ```
 
+## Interview-ready incident reports
+
+The incident report layer converts raw validation output into operations narratives.
+
+```text
+docs/05-incident-reports/README.md
+docs/05-incident-reports/enhanced-service-workflow-baseline-report.md
+docs/05-incident-reports/upload-limit-incident-report.md
+docs/05-incident-reports/latency-diagnosis-incident-report.md
+docs/05-incident-reports/db-web-impact-incident-report.md
+docs/05-incident-reports/restore-lab-recovery-incident-report.md
+```
+
+Recommended interview sequence:
+
+```text
+1. Start with the enhanced service workflow baseline.
+2. Explain upload-limit diagnosis as WEB/WAS/DB/NFS separation.
+3. Explain latency diagnosis as WAS-side delay vs DB-backed delay.
+4. Explain DB web-impact as health vs readiness and dependency failure.
+5. Explain restore-lab as the difference between backup artifact creation and recovery proof.
+```
+
+Scenario-specific Q&A:
+
+```text
+docs/00-project/interview-incident-qna.md
+```
+
+Portfolio reading guide:
+
+```text
+docs/00-project/portfolio-review-guide.md
+```
+
 ## Representative evidence documents
 
 ```text
