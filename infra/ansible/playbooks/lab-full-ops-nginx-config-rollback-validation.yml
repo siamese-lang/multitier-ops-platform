@@ -1,0 +1,306 @@
+---
+- name: Validate Nginx bad config detection and rollback path
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_config_rollback_request_prefix: lab-full-ops-nginx-config-rollback
+    nginx_config_rollback_report_dir: /tmp/multitier-ops-platform
+    nginx_config_rollback_result_dir: "{{ nginx_config_rollback_report_dir }}/lab-full-ops-nginx-config-rollback"
+    nginx_config_rollback_report_file: "{{ nginx_config_rollback_report_dir }}/lab-full-ops-nginx-config-rollback-{{ inventory_hostname }}.txt"
+    nginx_config_rollback_site_file: "{{ nginx_ops_site_available | default('/etc/nginx/sites-available/ops-sample-service.conf') }}"
+    nginx_config_rollback_backup_file: "{{ nginx_config_rollback_result_dir }}/ops-sample-service.conf.before-bad-nginx-{{ ansible_date_time.epoch }}"
+    nginx_config_rollback_base_url: https://127.0.0.1
+    nginx_config_rollback_bad_config: |
+      # Intentionally invalid Nginx config for bounded rollback validation.
+      # This file must be restored before the playbook exits.
+      server {
+          listen 443 ssl;
+          server_name _;
+          definitely_invalid_nginx_directive on;
+      }
+
+  pre_tasks:
+    - name: Assert this validation runs from the WEB tier
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names"
+        fail_msg: "Run this validation from nginx-01 through the web inventory group."
+
+    - name: Explain runtime boundary
+      ansible.builtin.debug:
+        msg:
+          - "This is a bounded Nginx bad-config detection and rollback validation."
+          - "It validates WEB-tier config test, config restore, reload, and proxied service checks."
+          - "It is not blue/green, canary, production change management, or zero-downtime release evidence."
+
+  tasks:
+    - name: Ensure Nginx rollback result directory exists
+      ansible.builtin.file:
+        path: "{{ nginx_config_rollback_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Capture baseline proxied service behavior through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ nginx_config_rollback_result_dir }}"
+        base_url="{{ nginx_config_rollback_base_url }}"
+        request_prefix="{{ nginx_config_rollback_request_prefix }}"
+
+        nginx -t > "${result_dir}/baseline-nginx-test.txt" 2>&1
+
+        curl -k -sS -o "${result_dir}/baseline-health.json" \
+          -w 'baseline_health_http_code=%{http_code}\nbaseline_health_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-health" \
+          "${base_url}/healthz" \
+          > "${result_dir}/baseline-health.metrics"
+
+        curl -k -sS -o "${result_dir}/baseline-version.json" \
+          -w 'baseline_version_http_code=%{http_code}\nbaseline_version_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-version" \
+          "${base_url}/version" \
+          > "${result_dir}/baseline-version.metrics"
+
+        curl -k -sS -o "${result_dir}/baseline-summary.json" \
+          -w 'baseline_summary_http_code=%{http_code}\nbaseline_summary_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-baseline-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${result_dir}/baseline-summary.metrics"
+
+        cat "${result_dir}/baseline-health.metrics"
+        cat "${result_dir}/baseline-version.metrics"
+        cat "${result_dir}/baseline-summary.metrics"
+        echo "baseline_nginx_test_rc=0"
+      args:
+        executable: /bin/bash
+      register: nginx_config_rollback_baseline
+      changed_when: false
+
+    - name: Capture baseline Nginx service state
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_config_rollback_baseline_service_state
+      changed_when: false
+
+    - name: Assert baseline Nginx path is healthy
+      ansible.builtin.assert:
+        that:
+          - nginx_config_rollback_baseline.stdout is search('baseline_health_http_code=200')
+          - nginx_config_rollback_baseline.stdout is search('baseline_version_http_code=200')
+          - nginx_config_rollback_baseline.stdout is search('baseline_summary_http_code=200')
+          - nginx_config_rollback_baseline_service_state.stdout == 'active'
+        fail_msg: "Baseline Nginx proxied path is not healthy. Do not run the bad config rollback validation."
+
+    - name: Check current Nginx site config exists
+      ansible.builtin.stat:
+        path: "{{ nginx_config_rollback_site_file }}"
+        checksum_algorithm: sha256
+      register: nginx_config_rollback_site_stat
+
+    - name: Assert current Nginx site config exists
+      ansible.builtin.assert:
+        that:
+          - nginx_config_rollback_site_stat.stat.exists
+        fail_msg: "Nginx site config not found at {{ nginx_config_rollback_site_file }}. Run Nginx baseline first."
+
+    - name: Back up current Nginx site config
+      ansible.builtin.copy:
+        src: "{{ nginx_config_rollback_site_file }}"
+        dest: "{{ nginx_config_rollback_backup_file }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Write bad Nginx config, test rejection, and always restore
+      block:
+        - name: Replace Nginx site with intentionally invalid candidate
+          ansible.builtin.copy:
+            dest: "{{ nginx_config_rollback_site_file }}"
+            content: "{{ nginx_config_rollback_bad_config }}"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Run nginx -t against invalid candidate
+          ansible.builtin.command: nginx -t
+          register: nginx_config_rollback_bad_test
+          changed_when: false
+          failed_when: false
+
+        - name: Record whether bad config was rejected
+          ansible.builtin.set_fact:
+            nginx_config_rollback_bad_rejected: "{{ nginx_config_rollback_bad_test.rc != 0 }}"
+
+        - name: Verify running Nginx service stayed active before restore
+          ansible.builtin.command: systemctl is-active nginx
+          register: nginx_config_rollback_service_during_bad_candidate
+          changed_when: false
+          failed_when: false
+
+        - name: Capture proxied health while bad config exists on disk but before reload
+          ansible.builtin.shell: |
+            set -uo pipefail
+            result_dir="{{ nginx_config_rollback_result_dir }}"
+            base_url="{{ nginx_config_rollback_base_url }}"
+            request_prefix="{{ nginx_config_rollback_request_prefix }}"
+            curl -k -sS -o "${result_dir}/bad-candidate-health.json" \
+              -w 'bad_candidate_health_http_code=%{http_code}\nbad_candidate_health_time_total=%{time_total}\n' \
+              -H "X-Request-Id: ${request_prefix}-bad-candidate-health" \
+              "${base_url}/healthz" \
+              > "${result_dir}/bad-candidate-health.metrics"
+            cat "${result_dir}/bad-candidate-health.metrics"
+          args:
+            executable: /bin/bash
+          register: nginx_config_rollback_bad_candidate_health
+          changed_when: false
+          failed_when: false
+
+      always:
+        - name: Restore previous Nginx site config
+          ansible.builtin.copy:
+            src: "{{ nginx_config_rollback_backup_file }}"
+            dest: "{{ nginx_config_rollback_site_file }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+          register: nginx_config_rollback_restore_copy
+          failed_when: false
+
+        - name: Validate restored Nginx config
+          ansible.builtin.command: nginx -t
+          register: nginx_config_rollback_restored_test
+          changed_when: false
+          failed_when: false
+
+        - name: Reload Nginx after restored config validation
+          ansible.builtin.service:
+            name: "{{ nginx_service_name | default('nginx') }}"
+            state: reloaded
+          register: nginx_config_rollback_reload
+          failed_when: false
+          when: nginx_config_rollback_restored_test.rc == 0
+
+        - name: Record restore attempt
+          ansible.builtin.set_fact:
+            nginx_config_rollback_restore_attempted: true
+
+    - name: Assert bad config was rejected and restored config is valid
+      ansible.builtin.assert:
+        that:
+          - nginx_config_rollback_bad_rejected | bool
+          - nginx_config_rollback_restored_test.rc == 0
+          - nginx_config_rollback_restore_attempted | bool
+        fail_msg: "Nginx bad config rejection or restore validation did not complete as expected."
+
+    - name: Capture post-rollback proxied service behavior through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ nginx_config_rollback_result_dir }}"
+        base_url="{{ nginx_config_rollback_base_url }}"
+        request_prefix="{{ nginx_config_rollback_request_prefix }}"
+
+        curl -k -sS -o "${result_dir}/rollback-health.json" \
+          -w 'rollback_health_http_code=%{http_code}\nrollback_health_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-rollback-health" \
+          "${base_url}/healthz" \
+          > "${result_dir}/rollback-health.metrics"
+
+        curl -k -sS -o "${result_dir}/rollback-version.json" \
+          -w 'rollback_version_http_code=%{http_code}\nrollback_version_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-rollback-version" \
+          "${base_url}/version" \
+          > "${result_dir}/rollback-version.metrics"
+
+        curl -k -sS -o "${result_dir}/rollback-summary.json" \
+          -w 'rollback_summary_http_code=%{http_code}\nrollback_summary_time_total=%{time_total}\n' \
+          -H "X-Request-Id: ${request_prefix}-rollback-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${result_dir}/rollback-summary.metrics"
+
+        cat "${result_dir}/rollback-health.metrics"
+        cat "${result_dir}/rollback-version.metrics"
+        cat "${result_dir}/rollback-summary.metrics"
+      args:
+        executable: /bin/bash
+      register: nginx_config_rollback_post
+      changed_when: false
+
+    - name: Capture final Nginx service state
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_config_rollback_final_service_state
+      changed_when: false
+
+    - name: Assert post-rollback Nginx path is healthy
+      ansible.builtin.assert:
+        that:
+          - nginx_config_rollback_post.stdout is search('rollback_health_http_code=200')
+          - nginx_config_rollback_post.stdout is search('rollback_version_http_code=200')
+          - nginx_config_rollback_post.stdout is search('rollback_summary_http_code=200')
+          - nginx_config_rollback_final_service_state.stdout == 'active'
+        fail_msg: "Nginx path did not recover after config rollback."
+
+    - name: Read recent Nginx access log evidence
+      ansible.builtin.shell: "grep '{{ nginx_config_rollback_request_prefix }}' {{ nginx_ops_access_log | default('/var/log/nginx/ops_access.log') }} | tail -n 30 || true"
+      register: nginx_config_rollback_access_log
+      changed_when: false
+
+    - name: Read recent Nginx error log evidence
+      ansible.builtin.shell: "tail -n 80 {{ nginx_ops_error_log | default('/var/log/nginx/ops_error.log') }} 2>/dev/null || true"
+      register: nginx_config_rollback_error_log
+      changed_when: false
+
+    - name: Write Nginx config rollback validation report
+      ansible.builtin.copy:
+        dest: "{{ nginx_config_rollback_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          inventory_hostname={{ inventory_hostname }}
+          validation=nginx-config-rollback-validation
+          request_prefix={{ nginx_config_rollback_request_prefix }}
+          site_file={{ nginx_config_rollback_site_file }}
+          backup_file={{ nginx_config_rollback_backup_file }}
+          original_site_sha256={{ nginx_config_rollback_site_stat.stat.checksum | default('unknown') }}
+
+          [baseline]
+          baseline_service_state={{ nginx_config_rollback_baseline_service_state.stdout | default('n/a') }}
+          {{ nginx_config_rollback_baseline.stdout | default('n/a') }}
+
+          [bad_candidate]
+          bad_config_rejected={{ nginx_config_rollback_bad_rejected | default(false) }}
+          bad_config_test_rc={{ nginx_config_rollback_bad_test.rc | default('n/a') }}
+          bad_config_test_output={{ (nginx_config_rollback_bad_test.stderr | default(nginx_config_rollback_bad_test.stdout) | default('n/a')) | regex_replace('\n', ' | ') }}
+          service_state_during_bad_candidate={{ nginx_config_rollback_service_during_bad_candidate.stdout | default('n/a') }}
+          {{ nginx_config_rollback_bad_candidate_health.stdout | default('n/a') }}
+
+          [rollback]
+          restore_attempted={{ nginx_config_rollback_restore_attempted | default(false) }}
+          restored_config_test_rc={{ nginx_config_rollback_restored_test.rc | default('n/a') }}
+          restored_config_test_output={{ (nginx_config_rollback_restored_test.stderr | default(nginx_config_rollback_restored_test.stdout) | default('n/a')) | regex_replace('\n', ' | ') }}
+          reload_changed={{ nginx_config_rollback_reload.changed | default('n/a') }}
+          final_service_state={{ nginx_config_rollback_final_service_state.stdout | default('n/a') }}
+          {{ nginx_config_rollback_post.stdout | default('n/a') }}
+          rollback_status={{ 'validated' if (nginx_config_rollback_bad_rejected | default(false) | bool) and nginx_config_rollback_restored_test.rc == 0 and nginx_config_rollback_final_service_state.stdout == 'active' else 'check_required' }}
+
+          [nginx_access_log]
+          {{ nginx_config_rollback_access_log.stdout | default('n/a') }}
+
+          [nginx_error_log_tail]
+          {{ nginx_config_rollback_error_log.stdout | default('n/a') }}
+
+          [interpretation]
+          supported=bounded evidence that an invalid Nginx config candidate was rejected by nginx -t, the running WEB tier stayed active before unsafe reload, and the original config was restored and reloaded with healthy proxied service checks
+          unsupported=production change management, zero-downtime release guarantee, blue-green deployment, canary deployment, production traffic safety guarantee
+
+    - name: Display Nginx config rollback validation report
+      ansible.builtin.command: "cat {{ nginx_config_rollback_report_file }}"
+      register: nginx_config_rollback_report
+      changed_when: false
+
+    - name: Show Nginx config rollback validation report
+      ansible.builtin.debug:
+        var: nginx_config_rollback_report.stdout_lines
