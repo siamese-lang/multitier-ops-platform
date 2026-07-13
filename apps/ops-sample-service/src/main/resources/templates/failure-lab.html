@@ -22,7 +22,7 @@
 
 <header>
   <h1>WEB/WAS Failure Lab</h1>
-  <p class="muted">Nginx timeout, WAS thread 점유, DB dependency latency, HikariCP connection pool pressure, 파일 저장소 상태를 관찰하기 위한 운영 검증용 경로입니다.</p>
+  <p class="muted">Nginx timeout, embedded Tomcat thread 점유, DB dependency latency, HikariCP connection pool pressure, 파일 저장소 상태를 관찰하기 위한 운영 검증용 경로입니다.</p>
 </header>
 
 <section class="card">
@@ -40,6 +40,23 @@
     <tr><th>Readable</th><td th:text="${storage.readable}">true</td></tr>
     <tr><th>Writable</th><td th:text="${storage.writable}">true</td></tr>
     <tr><th>Ready</th><td th:text="${storage.ready}">true</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>WAS runtime</h2>
+  <table>
+    <tbody>
+    <tr><th>Container</th><td th:text="${wasRuntime.settings.container}">Spring Boot embedded Tomcat</td></tr>
+    <tr><th>Max threads</th><td th:text="${wasRuntime.settings.maxThreads}">200</td></tr>
+    <tr><th>Min spare threads</th><td th:text="${wasRuntime.settings.minSpareThreads}">10</td></tr>
+    <tr><th>Accept count</th><td th:text="${wasRuntime.settings.acceptCount}">100</td></tr>
+    <tr><th>Connection timeout</th><td th:text="${wasRuntime.settings.connectionTimeout}">20s</td></tr>
+    <tr><th>Current request thread</th><td th:text="${wasRuntime.threads.currentThread}">http-nio-8080-exec-1</td></tr>
+    <tr><th>Live JVM threads</th><td th:text="${wasRuntime.threads.liveThreadCount}">0</td></tr>
+    <tr><th>Peak JVM threads</th><td th:text="${wasRuntime.threads.peakThreadCount}">0</td></tr>
+    <tr><th>Available processors</th><td th:text="${wasRuntime.jvm.availableProcessors}">1</td></tr>
     </tbody>
   </table>
 </section>
@@ -72,9 +89,14 @@
     </thead>
     <tbody>
     <tr>
+      <td><a href="/api/failure-lab/was-runtime"><code>/api/failure-lab/was-runtime</code></a></td>
+      <td>내장 Tomcat 기반 WAS process 설정과 JVM thread 상태 확인</td>
+      <td>Tomcat maxThreads, acceptCount, request thread name, live JVM threads</td>
+    </tr>
+    <tr>
       <td><a href="/api/failure-lab/sleep?millis=3000"><code>/api/failure-lab/sleep?millis=3000</code></a></td>
-      <td>WAS thread를 일정 시간 점유하는 긴 요청</td>
-      <td>Nginx upstream response time, app request duration, 동시 요청 시 thread saturation</td>
+      <td>WAS request thread를 일정 시간 점유하는 긴 요청</td>
+      <td>Nginx upstream response time, app request duration, 동시 요청 시 WAS thread saturation</td>
     </tr>
     <tr>
       <td><a href="/api/failure-lab/db-sleep?millis=3000"><code>/api/failure-lab/db-sleep?millis=3000</code></a></td>
@@ -107,7 +129,8 @@
 
 <section class="card">
   <h2>CLI examples</h2>
-  <pre>curl -i -H 'X-Request-Id: was-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/sleep?millis=3000'
+  <pre>curl -i -H 'X-Request-Id: was-runtime-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/was-runtime'
+curl -i -H 'X-Request-Id: was-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/sleep?millis=3000'
 curl -i -H 'X-Request-Id: db-sleep-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-sleep?millis=3000'
 curl -i -H 'X-Request-Id: db-hold-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-hold?seconds=10'
 curl -i -H 'X-Request-Id: db-pool-001' 'http://&lt;nginx-public-ip&gt;/api/failure-lab/db-pool'
@@ -117,7 +140,7 @@ curl -i -H 'X-Request-Id: upload-limits-001' 'http://&lt;nginx-public-ip&gt;/api
 
 <section class="card">
   <h2>Guardrail</h2>
-  <p class="muted">이 화면은 운영 검증용입니다. 상용 장애 주입 플랫폼이나 부하 테스트 도구가 아니라, WEB/WAS/DB/File 계층의 관찰 지점을 명확히 만들기 위한 최소 failure-lab입니다.</p>
+  <p class="muted">이 화면은 운영 검증용입니다. 외부 Tomcat 설치 프로젝트나 상용 장애 주입 플랫폼이 아니라, Nginx + Spring Boot embedded Tomcat + DB/File 계층의 관찰 지점을 명확히 만들기 위한 최소 failure-lab입니다.</p>
 </section>
 
 <footer class="muted">
