@@ -211,7 +211,7 @@
           ansible_host={{ ansible_host | default('n/a') }}
           request_prefix={{ restore_lab_http_request_prefix }}
           base_url={{ restore_lab_http_base_url }}
-          source_backup_id=lab-full-ops-backup-20260712T072623
+          source_backup_id={{ restore_lab_source_backup_id | default('unknown') }}
           sample_work_order_id={{ restore_lab_sample_work_order_id }}
           sample_evidence_id={{ restore_lab_sample_evidence_id }}
           sample_storage_path={{ restore_lab_sample_storage_path }}
