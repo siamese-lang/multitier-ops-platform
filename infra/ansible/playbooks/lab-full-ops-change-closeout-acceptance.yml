@@ -37,11 +37,18 @@
           - "It does not create AWS resources, install packages, or require private subnet NAT egress."
 
   tasks:
-    - name: Ensure closeout result directory exists
+    - name: Ensure closeout result directory exists on web host
       ansible.builtin.file:
         path: "{{ closeout_result_dir }}"
         state: directory
         mode: "0755"
+
+    - name: Ensure closeout result directory exists on delegated DB host
+      ansible.builtin.file:
+        path: "{{ closeout_result_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ closeout_db_host }}"
 
     - name: Validate current service readiness through Nginx
       ansible.builtin.shell: |
@@ -146,25 +153,27 @@
     - name: Verify CHG-001 event history and evidence metadata directly on db-primary-01
       ansible.builtin.shell: |
         set -euo pipefail
+        result_dir="{{ closeout_result_dir }}"
+        mkdir -p "${result_dir}"
         work_order_id="{{ closeout_work_order_id | int }}"
         db_name={{ closeout_db_name | quote }}
 
         sudo -u postgres psql -d "${db_name}" -AtF $'\t' -c \
           "select event_type, coalesce(from_status, ''), coalesce(to_status, ''), actor from ops_work_order_events where work_order_id = ${work_order_id} order by id;" \
-          > "{{ closeout_result_dir }}/db-events.tsv"
+          > "${result_dir}/db-events.tsv"
 
         sudo -u postgres psql -d "${db_name}" -AtF $'\t' -c \
           "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where work_order_id = ${work_order_id} order by id desc limit 1;" \
-          > "{{ closeout_result_dir }}/db-evidence.tsv"
+          > "${result_dir}/db-evidence.tsv"
 
-        cat "{{ closeout_result_dir }}/db-events.tsv"
+        cat "${result_dir}/db-events.tsv"
         echo "---evidence---"
-        cat "{{ closeout_result_dir }}/db-evidence.tsv"
+        cat "${result_dir}/db-evidence.tsv"
 
-        grep -q $'CREATED\t\tOPEN\tops-change-manager' "{{ closeout_result_dir }}/db-events.tsv"
-        grep -q $'STATUS_CHANGED\tOPEN\tIN_PROGRESS\twas-operator' "{{ closeout_result_dir }}/db-events.tsv"
-        grep -q $'STATUS_CHANGED\tIN_PROGRESS\tDONE\tops-change-manager' "{{ closeout_result_dir }}/db-events.tsv"
-        test -s "{{ closeout_result_dir }}/db-evidence.tsv"
+        grep -q $'CREATED\t\tOPEN\tops-change-manager' "${result_dir}/db-events.tsv"
+        grep -q $'STATUS_CHANGED\tOPEN\tIN_PROGRESS\twas-operator' "${result_dir}/db-events.tsv"
+        grep -q $'STATUS_CHANGED\tIN_PROGRESS\tDONE\tops-change-manager' "${result_dir}/db-events.tsv"
+        test -s "${result_dir}/db-evidence.tsv"
       args:
         executable: /bin/bash
       delegate_to: "{{ closeout_db_host }}"
@@ -328,6 +337,4 @@
           - closeout_api_file_exists == 'true'
           - closeout_api_size_matches == 'true'
           - closeout_api_checksum_matches == 'true'
-        fail_msg: >-
-          CHG-001 closeout acceptance did not validate. Inspect {{ closeout_report_file }},
-          {{ closeout_result_dir }}, DB event rows, NFS object checks, and request-id logs.
+        fail_msg: "CHG-001 closeout acceptance did not validate. Inspect {{ closeout_report_file }} and {{ closeout_result_dir }}."
