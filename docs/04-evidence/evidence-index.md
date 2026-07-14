@@ -63,6 +63,18 @@ Final runtime summary:
 docs/04-evidence/final-runtime-validation-2026-07-13.md
 ```
 
+## Representative interview scenario map
+
+Use this table when reviewing the portfolio quickly or preparing for interviews. The interview Q&A is an explanation layer, not primary evidence. The evidence documents remain the source of truth for claims.
+
+| Representative scenario | What it proves | Primary evidence | Interview explanation | Boundary |
+|---|---|---|---|---|
+| Nginx bad config detection and rollback | WEB-tier config candidates can be checked before reload, and a known-good config can be restored and validated through proxied service checks | `docs/04-evidence/final-runtime-validation-2026-07-13.md` | `docs/00-project/interview-incident-qna.md` Q8 | Not production change-management maturity, traffic safety guarantee, blue/green, or canary deployment |
+| Bad WAS artifact deployment and rollback | A VM/systemd WAS deployment failure can be detected through service and health behavior, then validated after jar/env rollback | `docs/04-evidence/final-runtime-validation-2026-07-13.md` | `docs/00-project/interview-incident-qna.md` Q6 | Not production release management, zero-downtime deployment, blue/green, or canary deployment |
+| Tomcat request-thread pressure vs HikariCP pool pressure | A delayed DB-backed API caused by WAS request-thread pressure can be distinguished from a failed DB-backed API caused by WAS-side DB connection-pool exhaustion | `docs/04-evidence/connection-pressure-validation-2026-07-13.md`, `docs/04-evidence/final-runtime-validation-2026-07-13.md` | `docs/00-project/interview-incident-qna.md` Q5 | Not production load testing, capacity sizing, SLO/SLA validation, or autoscaling evidence |
+| App-side NFS mount failure and recovery | DB-backed work-order creation and file-storage-dependent evidence-file creation can fail differently, and recovery can be validated with DB metadata, NFS object, size, and SHA-256 | `docs/04-evidence/final-runtime-validation-2026-07-13.md` | `docs/00-project/interview-incident-qna.md` Q7 | Not production storage HA, automatic failover, NFS performance tuning, or chaos engineering |
+| Backup artifact vs restore-lab recovery proof | Backup artifact creation and recovery proof are separate; recovery is claimed only after restore-lab DB/file/API consistency validation | `docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md`, `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` | `docs/00-project/interview-incident-qna.md` Q12 | Not production DR, RPO/RTO guarantee, continuous backup policy, or managed database recovery |
+
 ## Claim map
 
 | Claim | Supporting evidence |
@@ -83,13 +95,13 @@ docs/04-evidence/final-runtime-validation-2026-07-13.md
 | WAS sleep vs DB sleep latency behavior was validated | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | DB web-impact incident was validated against the enhanced service model | `docs/00-project/current-state-after-enhanced-runtime-validation.md` |
 | Restore-lab recovery was refreshed against the enhanced service model | `docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md` |
-| Bounded WEB/WAS/DB connection pressure was validated through Nginx, embedded Tomcat, HikariCP, and PostgreSQL | `docs/04-evidence/connection-pressure-validation-2026-07-13.md`, `docs/04-evidence/final-runtime-validation-2026-07-13.md` |
+| Bounded WEB/WAS/DB connection pressure was validated through Nginx, embedded Tomcat, HikariCP, and PostgreSQL | `docs/04-evidence/connection-pressure-validation-2026-07-13.md`, `docs/04-evidence/final-runtime-validation-2026-07-13.md`, `docs/00-project/interview-incident-qna.md` Q5 |
 | WAS request-thread pressure caused delayed but successful DB-backed API behavior | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
 | HikariCP pool pressure caused DB-backed API failure while PostgreSQL remained active | `docs/04-evidence/connection-pressure-validation-2026-07-13.md` |
-| Bad WAS artifact deployment was detected and rolled back through jar/env restore | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
-| App-side NFS mount loss affected evidence-file creation while DB-backed work-order creation remained available | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
-| NFS remount restored evidence-file consistency with DB metadata, NFS object, size, and SHA-256 checks | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
-| Invalid Nginx config candidate was rejected by `nginx -t` before unsafe reload and restored config was reloaded successfully | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive |
+| Bad WAS artifact deployment was detected and rolled back through jar/env restore | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive, `docs/00-project/interview-incident-qna.md` Q6 |
+| App-side NFS mount loss affected evidence-file creation while DB-backed work-order creation remained available | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive, `docs/00-project/interview-incident-qna.md` Q7 |
+| NFS remount restored evidence-file consistency with DB metadata, NFS object, size, and SHA-256 checks | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive, `docs/00-project/interview-incident-qna.md` Q7 |
+| Invalid Nginx config candidate was rejected by `nginx -t` before unsafe reload and restored config was reloaded successfully | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, raw local report archive, `docs/00-project/interview-incident-qna.md` Q8 |
 | AWS lab resources were destroyed after evidence collection | `docs/04-evidence/final-runtime-validation-2026-07-13.md`, local final-state Terraform evidence archive |
 
 ## Core evidence documents
