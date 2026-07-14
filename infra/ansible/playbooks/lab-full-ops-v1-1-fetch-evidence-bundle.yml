@@ -63,7 +63,7 @@
           echo "inventory_hostname={{ inventory_hostname }}"
           echo "ansible_host={{ ansible_host | default('n/a') }}"
           echo "groups={{ group_names | join(',') }}"
-          echo "created_at={{ ansible_date_time.iso8601 | default('manual') }}"
+          echo "created_at={{ ansible_facts.date_time.iso8601 | default('manual') }}"
           echo "scenario=preflight_bad_db_env_rollback_postflight"
           echo "staging_dir=${stage}"
           echo "archive_file={{ v1_1_remote_archive_file }}"
@@ -148,7 +148,7 @@
         set -euo pipefail
         cd "{{ v1_1_report_dir }}"
         tar -czf "{{ v1_1_remote_archive_file }}" "{{ v1_1_remote_staging_dir | basename }}"
-        sha256sum "{{ v1_1_remote_archive_file }}" > "{{ v1_1_remote_archive_file }}.sha256"
+        sha256sum "{{ v1_1_remote_archive_file | basename }}" > "{{ v1_1_remote_archive_file }}.sha256"
         ls -lh "{{ v1_1_remote_archive_file }}" "{{ v1_1_remote_archive_file }}.sha256"
       args:
         executable: /bin/bash
