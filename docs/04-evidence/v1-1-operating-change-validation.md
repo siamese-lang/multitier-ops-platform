@@ -8,13 +8,13 @@ This evidence note records the v1.1 runtime validation for the project theme:
 AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 검증
 ```
 
-The validation scenario is:
+The validated scenario is:
 
 ```text
-운영 변경 요청 기반 WAS DB 환경변수 오설정 감지, 롤백, 변경 요청 추적 검증
+운영 변경 요청 기반 WAS DB 환경변수 오설정 감지, 롤백, 변경 요청 추적, 종료 판단 검증
 ```
 
-This is not a production DR, HA, or zero-downtime validation. It is a controlled EC2 lab scenario that verifies whether an operator can detect a bad WAS configuration change, separate process health from dependency readiness, restore the previous environment file, verify post-change service behavior, and link the change to work-order, DB, NFS, and log evidence.
+This is not a production DR, HA, SLA, or zero-downtime validation. It is a controlled EC2 lab scenario that verifies whether an operator can detect a bad WAS configuration change, separate process health from dependency readiness, restore the previous environment file, verify post-change service behavior, represent the change as work-order data, and close the change only after DB, NFS, API, and log evidence are consistent.
 
 ## Runtime context
 
@@ -40,7 +40,7 @@ nfs-01
 backup-01
 ```
 
-Terraform validation profile during package installation and the main v1.1 validation window:
+Terraform validation profile during package installation and the initial v1.1 validation window:
 
 ```text
 app_02=false
@@ -61,18 +61,11 @@ NAT Elastic IP released
 EC2 runtime kept for follow-up low-risk validation
 ```
 
-NAT Gateway was needed only while the private EC2 nodes required outbound access for package installation. The follow-up change-request trace and evidence bundle collection used already-installed services and internal VPC communication.
+NAT Gateway was needed only while the private EC2 nodes required outbound access for package installation. The follow-up change-request trace, closeout acceptance check, and evidence bundle collection used already-installed services and internal VPC communication.
 
 ## Validation flow
 
-The initial orchestrated validation command was:
-
-```bash
-V1_1_EVIDENCE_DIR=/mnt/c/Project/test/multitier-ops-platform/evidence/v1-1 \
-  scripts/run-v1-1-operating-change-validation.sh --execute
-```
-
-The v1.1 operating procedure now represents this flow:
+The v1.1 operating procedure now represents this closed flow:
 
 ```text
 preflight
@@ -81,10 +74,11 @@ preflight
 -> environment rollback
 -> postflight business workflow validation
 -> CHG-style work-order trace validation
+-> change closeout acceptance validation
 -> evidence bundle archive/fetch
 ```
 
-The CHG-style trace was validated separately against the already-running parked runtime after NAT removal.
+The trace and closeout acceptance checks were validated against the already-running parked runtime after NAT removal. They do not install packages, create AWS resources, or require private subnet internet egress.
 
 ## Evidence archives
 
@@ -94,31 +88,32 @@ Local evidence archive directory:
 /mnt/c/Project/test/multitier-ops-platform/evidence/v1-1
 ```
 
-Final evidence archives after adding the CHG-style trace:
+Final evidence archives after adding CHG-style trace and closeout acceptance:
 
 ```text
-lab-full-ops-v1-1-app-01-20260714T073113.tar.gz
-lab-full-ops-v1-1-app-01-20260714T073113.tar.gz.sha256
-lab-full-ops-v1-1-nginx-01-20260714T073113.tar.gz
-lab-full-ops-v1-1-nginx-01-20260714T073113.tar.gz.sha256
+lab-full-ops-v1-1-app-01-20260714T074339.tar.gz
+lab-full-ops-v1-1-app-01-20260714T074339.tar.gz.sha256
+lab-full-ops-v1-1-nginx-01-20260714T074339.tar.gz
+lab-full-ops-v1-1-nginx-01-20260714T074339.tar.gz.sha256
 ```
 
 Checksum result, verified locally with the fetched `.sha256` files:
 
 ```text
-lab-full-ops-v1-1-app-01-20260714T073113.tar.gz: OK
-lab-full-ops-v1-1-nginx-01-20260714T073113.tar.gz: OK
+lab-full-ops-v1-1-app-01-20260714T074339.tar.gz: OK
+lab-full-ops-v1-1-nginx-01-20260714T074339.tar.gz: OK
 ```
-
-## Key validation results
 
 The final evidence bundle manifests recorded:
 
 ```text
-scenario=preflight_bad_db_env_rollback_postflight_change_trace
+scenario=preflight_bad_db_env_rollback_postflight_change_trace_closeout_acceptance
 trace.scenario=chg_001_was_db_env_rollback_trace
+closeout.scenario=chg_001_closeout_acceptance
 validation=lab-full-ops-v1-1-evidence-bundle
 ```
+
+## Key validation results
 
 The app-side bad DB environment rollback report recorded:
 
@@ -162,6 +157,17 @@ checksum_matches=true
 trace_status=validated
 ```
 
+The closeout acceptance report recorded:
+
+```text
+validation=lab-full-ops-change-closeout-acceptance
+scenario=chg_001_closeout_acceptance
+work_order_id=7
+api_consistent=true
+api_checksum_matches=true
+acceptance_status=validated
+```
+
 The direct DB row evidence showed the change request and status history:
 
 ```text
@@ -179,17 +185,11 @@ size=215
 sha256=ac941cc42e7521598652546074f5f6305e85f61c7a8269d29e03524d199aa3f7
 ```
 
-Nginx access logs and application journal logs both included the same request-id prefix:
+Nginx access logs and application journal logs included request-id evidence for both the change trace and closeout acceptance checks.
 
 ```text
-lab-full-ops-change-trace-dependencies-before
-lab-full-ops-change-trace-work-order-create
-lab-full-ops-change-trace-work-order-in-progress
-lab-full-ops-change-trace-evidence-create
-lab-full-ops-change-trace-evidence-consistency
-lab-full-ops-change-trace-work-order-done
-lab-full-ops-change-trace-events
-lab-full-ops-change-trace-audit-logs
+lab-full-ops-change-trace-*
+lab-full-ops-closeout-acceptance-*
 ```
 
 ## Interpretation
@@ -206,8 +206,9 @@ The v1.1 scenario validated the intended operating-change behavior:
 7. Postflight business workflow validation completed after rollback.
 8. The change was represented as CHG-001 work-order data.
 9. The change request moved through OPEN -> IN_PROGRESS -> DONE.
-10. DB rows, NFS object state, API consistency, and request-id logs were all tied to the same trace.
-11. Evidence was archived from both WEB and WAS tiers.
+10. DB rows, NFS object state, API consistency, and request-id logs were tied to the same trace.
+11. Closeout acceptance confirmed that the change could be closed based on service readiness and evidence consistency.
+12. Evidence was archived from both WEB and WAS tiers.
 ```
 
 The important operational point is that `/healthz` and `/readyz` were intentionally interpreted differently:
@@ -218,32 +219,38 @@ The important operational point is that `/healthz` and `/readyz` were intentiona
 /dependencies 503  -> dependency-level failure details are observable
 ```
 
-This supports the portfolio claim that the lab validates changes through request state, dependency status, rollback, DB records, file evidence, checksums, and logs rather than relying on a single service-active check.
-
-## Known follow-up fixed after the first v1.1 run
-
-During the first local checksum verification, the fetched `.sha256` files referenced the remote absolute archive path under `/tmp/multitier-ops-platform`. The archive hashes were valid when checked by basename, but the checksum files were inconvenient for local `sha256sum -c` usage.
-
-The evidence bundle playbook was updated so later `.sha256` files record the archive basename instead of the remote absolute path. The final 20260714T073113 archives were verified directly with `sha256sum -c`.
-
-## Current cleanup state
-
-The lab runtime was not destroyed after v1.1 because additional low-risk validation was still useful. Instead, NAT was removed and the configured EC2 runtime was kept.
-
-Current intended parked state:
+After rollback and closeout acceptance, the expected state changed to:
 
 ```text
-EC2 runtime: kept
-NAT Gateway: removed
-NAT Elastic IP: released
-private subnet default egress: disabled
-Ansible ping: successful
-preflight check: successful
+/healthz 200
+/readyz 200
+/dependencies 200
+work_order_status=DONE
+acceptance_status=validated
 ```
 
-Destroy the lab from Git Bash when no further runtime validation is planned:
+This supports the portfolio claim that the lab validates operating changes through status, dependency, rollback, work-order history, evidence consistency, and closeout acceptance rather than by relying on a single service-active check.
+
+## Runtime status after validation
+
+The runtime was not destroyed immediately after this validation because follow-up low-risk checks were still useful. Instead, NAT Gateway was removed and the configured EC2 runtime was parked.
+
+```text
+NAT Gateway: removed
+NAT EIP: released
+Private subnet egress: disabled
+Runtime: kept temporarily
+```
+
+This should be presented as a lab operating decision, not as production cost optimization.
+
+## Cleanup decision
+
+At this point, the v1.1 evidence path is complete. If no additional runtime validation is planned, destroy the lab runtime from Git Bash:
 
 ```bash
 cd /c/Project/test/multitier-ops-platform/infra/terraform/envs/lab-full-ops
 terraform destroy
 ```
+
+If additional low-risk validation is still planned, keep the parked runtime but do not re-enable NAT unless package installation or external downloads are required.
