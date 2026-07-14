@@ -12,8 +12,8 @@
     bad_db_env_report_file: "{{ bad_db_env_report_dir }}/lab-full-ops-bad-db-env-rollback-{{ inventory_hostname }}.txt"
     bad_db_env_backup_dir: "{{ ops_app_home }}/releases"
     bad_db_env_env_file: "{{ ops_app_config_dir }}/ops-sample-service.env"
-    bad_db_env_backup_file: "{{ bad_db_env_backup_dir }}/ops-sample-service.env.before-bad-db-env-{{ ansible_date_time.epoch }}"
-    bad_db_env_marker_id: "bad-db-env-{{ ansible_date_time.epoch }}"
+    bad_db_env_backup_file: "{{ bad_db_env_backup_dir }}/ops-sample-service.env.before-bad-db-env-{{ ansible_facts.date_time.epoch }}"
+    bad_db_env_marker_id: "bad-db-env-{{ ansible_facts.date_time.epoch }}"
     bad_db_env_invalid_db_url: "jdbc:postgresql://127.0.0.1:1/{{ ops_db_name | default('opsdb') }}"
     bad_db_env_health_url: "{{ ops_app_healthcheck_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/healthz') }}"
     bad_db_env_ready_url: "{{ ops_app_readycheck_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/readyz') }}"
@@ -81,10 +81,10 @@
       ansible.builtin.set_fact:
         bad_db_env_failure_observed: false
         bad_db_env_rollback_attempted: false
-        bad_db_env_result_dir: "{{ bad_db_env_baseline_probe.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
-        bad_db_env_baseline_health_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_health_code=([^\n]+)', '\\1') | first }}"
-        bad_db_env_baseline_ready_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_ready_code=([^\n]+)', '\\1') | first }}"
-        bad_db_env_baseline_dependencies_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_dependencies_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_result_dir: "{{ bad_db_env_baseline_probe.stdout | regex_search('result_dir=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_baseline_health_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_health_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_baseline_ready_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_ready_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_baseline_dependencies_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_dependencies_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
 
     - name: Run bad DB env change and rollback validation with guaranteed restore
       block:
@@ -135,25 +135,40 @@
             health_code=$(curl -sS -o "${result_dir}/bad-healthz.json" -w '%{http_code}' "{{ bad_db_env_health_url }}" || true)
             ready_code=$(curl -sS -o "${result_dir}/bad-readyz.json" -w '%{http_code}' "{{ bad_db_env_ready_url }}" || true)
             dependencies_code=$(curl -sS -o "${result_dir}/bad-dependencies.json" -w '%{http_code}' "{{ bad_db_env_dependencies_url }}" || true)
-            python3 - "${result_dir}/bad-dependencies.json" <<'PY'
-            import json
-            import sys
-            data = json.load(open(sys.argv[1]))
-            summary = data.get("summary", {})
-            deps = data.get("dependencies", {})
-            print(f"dependency_status={data.get('status')}")
-            print(f"summary_ready={str(summary.get('ready')).lower()}")
-            print(f"summary_app={summary.get('app')}")
-            print(f"summary_db={summary.get('db')}")
-            print(f"summary_db_pool={summary.get('dbPool')}")
-            print(f"summary_storage={summary.get('storage')}")
-            print(f"db_dependency_status={deps.get('db', {}).get('status')}")
-            print(f"db_pool_dependency_status={deps.get('dbPool', {}).get('status')}")
-            print(f"storage_ready={str(deps.get('storage', {}).get('ready')).lower()}")
-            PY
             echo "bad_health_code=${health_code}"
             echo "bad_ready_code=${ready_code}"
             echo "bad_dependencies_code=${dependencies_code}"
+            python3 - "${result_dir}/bad-dependencies.json" <<'PY'
+            import json
+            import sys
+            path = sys.argv[1]
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    data = json.load(handle)
+                summary = data.get("summary", {}) or {}
+                deps = data.get("dependencies", {}) or {}
+                print(f"dependency_status={data.get('status', 'unknown')}")
+                print(f"summary_ready={str(summary.get('ready', False)).lower()}")
+                print(f"summary_app={summary.get('app', 'UNKNOWN')}")
+                print(f"summary_db={summary.get('db', 'UNKNOWN')}")
+                print(f"summary_db_pool={summary.get('dbPool', 'UNKNOWN')}")
+                print(f"summary_storage={summary.get('storage', 'UNKNOWN')}")
+                print(f"db_dependency_status={deps.get('db', {}).get('status', 'UNKNOWN')}")
+                print(f"db_pool_dependency_status={deps.get('dbPool', {}).get('status', 'UNKNOWN')}")
+                print(f"storage_ready={str(deps.get('storage', {}).get('ready', False)).lower()}")
+                print("dependencies_parse_error=none")
+            except Exception as exc:
+                print("dependency_status=parse_error")
+                print("summary_ready=false")
+                print("summary_app=UNKNOWN")
+                print("summary_db=UNKNOWN")
+                print("summary_db_pool=UNKNOWN")
+                print("summary_storage=UNKNOWN")
+                print("db_dependency_status=UNKNOWN")
+                print("db_pool_dependency_status=UNKNOWN")
+                print("storage_ready=false")
+                print(f"dependencies_parse_error={type(exc).__name__}:{exc}")
+            PY
           args:
             executable: /bin/bash
           register: bad_db_env_failure_probe
@@ -171,27 +186,31 @@
           changed_when: false
           failed_when: false
 
+        - name: Record bad DB env observed values
+          ansible.builtin.set_fact:
+            bad_db_env_health_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_health_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_ready_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_ready_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_dependencies_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_dependencies_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_dependency_status: "{{ bad_db_env_failure_probe.stdout | regex_search('dependency_status=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_summary_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_ready=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_summary_app: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_app=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_summary_db: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_summary_db_pool: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db_pool=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_summary_storage: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_storage_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+            bad_db_env_dependencies_parse_error: "{{ bad_db_env_failure_probe.stdout | regex_search('dependencies_parse_error=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+
         - name: Record whether bad DB env failure was observable and properly isolated
           ansible.builtin.set_fact:
-            bad_db_env_health_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_health_code=([^\n]+)', '\\1') | first }}"
-            bad_db_env_ready_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_ready_code=([^\n]+)', '\\1') | first }}"
-            bad_db_env_dependencies_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_dependencies_code=([^\n]+)', '\\1') | first }}"
-            bad_db_env_dependency_status: "{{ bad_db_env_failure_probe.stdout | regex_search('dependency_status=([^\n]+)', '\\1') | first }}"
-            bad_db_env_summary_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_ready=([^\n]+)', '\\1') | first }}"
-            bad_db_env_summary_app: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_app=([^\n]+)', '\\1') | first }}"
-            bad_db_env_summary_db: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db=([^\n]+)', '\\1') | first }}"
-            bad_db_env_summary_db_pool: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db_pool=([^\n]+)', '\\1') | first }}"
-            bad_db_env_summary_storage: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | first }}"
-            bad_db_env_storage_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | first }}"
             bad_db_env_failure_observed: >-
               {{
-                (bad_db_env_failure_probe.stdout | regex_search('bad_health_code=([^\n]+)', '\\1') | first) == '200'
-                and (bad_db_env_failure_probe.stdout | regex_search('bad_ready_code=([^\n]+)', '\\1') | first) == '503'
-                and (bad_db_env_failure_probe.stdout | regex_search('bad_dependencies_code=([^\n]+)', '\\1') | first) == '503'
-                and (bad_db_env_failure_probe.stdout | regex_search('summary_app=([^\n]+)', '\\1') | first) == 'UP'
-                and (bad_db_env_failure_probe.stdout | regex_search('summary_db=([^\n]+)', '\\1') | first) == 'DOWN'
-                and (bad_db_env_failure_probe.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | first) == 'UP'
-                and (bad_db_env_failure_probe.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | first) == 'true'
+                bad_db_env_health_code == '200'
+                and bad_db_env_ready_code == '503'
+                and bad_db_env_dependencies_code == '503'
+                and bad_db_env_summary_app == 'UP'
+                and bad_db_env_summary_db == 'DOWN'
+                and bad_db_env_summary_storage == 'UP'
+                and bad_db_env_storage_ready == 'true'
               }}
 
       always:
@@ -230,21 +249,33 @@
         health_code=$(curl -sS -o "${result_dir}/rollback-healthz.json" -w '%{http_code}' "{{ bad_db_env_health_url }}" || true)
         ready_code=$(curl -sS -o "${result_dir}/rollback-readyz.json" -w '%{http_code}' "{{ bad_db_env_ready_url }}" || true)
         dependencies_code=$(curl -sS -o "${result_dir}/rollback-dependencies.json" -w '%{http_code}' "{{ bad_db_env_dependencies_url }}" || true)
-        python3 - "${result_dir}/rollback-dependencies.json" <<'PY'
-        import json
-        import sys
-        data = json.load(open(sys.argv[1]))
-        summary = data.get("summary", {})
-        print(f"rollback_dependency_status={data.get('status')}")
-        print(f"rollback_summary_ready={str(summary.get('ready')).lower()}")
-        print(f"rollback_summary_app={summary.get('app')}")
-        print(f"rollback_summary_db={summary.get('db')}")
-        print(f"rollback_summary_db_pool={summary.get('dbPool')}")
-        print(f"rollback_summary_storage={summary.get('storage')}")
-        PY
         echo "rollback_health_code=${health_code}"
         echo "rollback_ready_code=${ready_code}"
         echo "rollback_dependencies_code=${dependencies_code}"
+        python3 - "${result_dir}/rollback-dependencies.json" <<'PY'
+        import json
+        import sys
+        path = sys.argv[1]
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            summary = data.get("summary", {}) or {}
+            print(f"rollback_dependency_status={data.get('status', 'unknown')}")
+            print(f"rollback_summary_ready={str(summary.get('ready', False)).lower()}")
+            print(f"rollback_summary_app={summary.get('app', 'UNKNOWN')}")
+            print(f"rollback_summary_db={summary.get('db', 'UNKNOWN')}")
+            print(f"rollback_summary_db_pool={summary.get('dbPool', 'UNKNOWN')}")
+            print(f"rollback_summary_storage={summary.get('storage', 'UNKNOWN')}")
+            print("rollback_dependencies_parse_error=none")
+        except Exception as exc:
+            print("rollback_dependency_status=parse_error")
+            print("rollback_summary_ready=false")
+            print("rollback_summary_app=UNKNOWN")
+            print("rollback_summary_db=UNKNOWN")
+            print("rollback_summary_db_pool=UNKNOWN")
+            print("rollback_summary_storage=UNKNOWN")
+            print(f"rollback_dependencies_parse_error={type(exc).__name__}:{exc}")
+        PY
       args:
         executable: /bin/bash
       register: bad_db_env_rollback_probe
@@ -252,14 +283,15 @@
 
     - name: Extract rollback validation values
       ansible.builtin.set_fact:
-        bad_db_env_rollback_health_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_health_code=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_ready_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_ready_code=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_dependencies_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependencies_code=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_dependency_status: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependency_status=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_summary_ready: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_ready=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_summary_app: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_app=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_summary_db: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_db=([^\n]+)', '\\1') | first }}"
-        bad_db_env_rollback_summary_storage: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_storage=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_health_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_health_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_ready_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_ready_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_dependencies_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependencies_code=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_dependency_status: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependency_status=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_summary_ready: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_ready=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_summary_app: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_app=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_summary_db: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_db=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_summary_storage: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_storage=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
+        bad_db_env_rollback_dependencies_parse_error: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependencies_parse_error=([^\n]+)', '\\1') | default(['n/a'], true) | first }}"
 
     - name: Capture final service state after bad DB env rollback
       ansible.builtin.command: systemctl is-active ops-sample-service
@@ -293,6 +325,7 @@
           bad_summary_db_pool={{ bad_db_env_summary_db_pool | default('n/a') }}
           bad_summary_storage={{ bad_db_env_summary_storage | default('n/a') }}
           bad_storage_ready={{ bad_db_env_storage_ready | default('n/a') }}
+          bad_dependencies_parse_error={{ bad_db_env_dependencies_parse_error | default('n/a') }}
           bad_env_failure_observed={{ bad_db_env_failure_observed | default(false) }}
           rollback_attempted={{ bad_db_env_rollback_attempted | default(false) }}
           rollback_restart_status={{ bad_db_env_rollback_restart.status | default(bad_db_env_rollback_restart.rc | default('n/a')) }}
@@ -304,6 +337,7 @@
           rollback_summary_app={{ bad_db_env_rollback_summary_app | default('n/a') }}
           rollback_summary_db={{ bad_db_env_rollback_summary_db | default('n/a') }}
           rollback_summary_storage={{ bad_db_env_rollback_summary_storage | default('n/a') }}
+          rollback_dependencies_parse_error={{ bad_db_env_rollback_dependencies_parse_error | default('n/a') }}
           final_service_state={{ bad_db_env_final_service_state.stdout | default('n/a') }}
           journal_excerpt={{ bad_db_env_journal_excerpt.stdout | default('n/a') }}
           result_dir={{ bad_db_env_result_dir }}
