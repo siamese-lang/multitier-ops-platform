@@ -92,6 +92,7 @@ jobs:
             playbooks/lab-full-ops-bad-db-env-rollback-validation.yml
             playbooks/lab-full-ops-v1-1-fetch-evidence-bundle.yml
             playbooks/lab-full-ops-v1-1-operating-change-validation.yml
+            playbooks/lab-full-ops-change-request-trace-validation.yml
             playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
             playbooks/lab-full-ops-enhanced-upload-limit-incident.yml
             playbooks/lab-full-ops-enhanced-latency-scenario.yml
