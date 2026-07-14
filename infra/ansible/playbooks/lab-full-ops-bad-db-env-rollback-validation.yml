@@ -1,0 +1,339 @@
+---
+- name: Run preflight before bad DB env rollback validation
+  ansible.builtin.import_playbook: lab-full-ops-preflight-check.yml
+
+- name: Validate controlled bad DB environment change and rollback path
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    bad_db_env_report_dir: "{{ ops_app_report_dir | default('/tmp/multitier-ops-platform') }}"
+    bad_db_env_report_file: "{{ bad_db_env_report_dir }}/lab-full-ops-bad-db-env-rollback-{{ inventory_hostname }}.txt"
+    bad_db_env_backup_dir: "{{ ops_app_home }}/releases"
+    bad_db_env_env_file: "{{ ops_app_config_dir }}/ops-sample-service.env"
+    bad_db_env_backup_file: "{{ bad_db_env_backup_dir }}/ops-sample-service.env.before-bad-db-env-{{ ansible_date_time.epoch }}"
+    bad_db_env_marker_id: "bad-db-env-{{ ansible_date_time.epoch }}"
+    bad_db_env_invalid_db_url: "jdbc:postgresql://127.0.0.1:1/{{ ops_db_name | default('opsdb') }}"
+    bad_db_env_health_url: "{{ ops_app_healthcheck_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/healthz') }}"
+    bad_db_env_ready_url: "{{ ops_app_readycheck_url | default('http://127.0.0.1:' ~ ops_app_port ~ '/readyz') }}"
+    bad_db_env_dependencies_url: "http://127.0.0.1:{{ ops_app_port }}/api/ops/dependencies"
+
+  pre_tasks:
+    - name: Show bad DB env rollback validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook validates a controlled WAS DB environment misconfiguration and rollback."
+          - "Expected failure shape: process health stays 200, readiness fails, DB dependency is DOWN, storage remains UP."
+          - "The previous environment file is restored in an always block before postflight runs."
+
+  tasks:
+    - name: Ensure rollback backup and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ bad_db_env_backup_dir }}"
+        - "{{ bad_db_env_report_dir }}"
+
+    - name: Check current environment file exists before bad DB env validation
+      ansible.builtin.stat:
+        path: "{{ bad_db_env_env_file }}"
+      register: bad_db_env_current_env_stat
+
+    - name: Assert current environment file exists before bad DB env validation
+      ansible.builtin.assert:
+        that:
+          - bad_db_env_current_env_stat.stat.exists
+        fail_msg: "Environment file was not found at {{ bad_db_env_env_file }}. Run the app deployment baseline first."
+
+    - name: Back up current environment file before bad DB env validation
+      ansible.builtin.copy:
+        src: "{{ bad_db_env_env_file }}"
+        dest: "{{ bad_db_env_backup_file }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Capture baseline local health, readiness, and dependency summary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ bad_db_env_report_dir }}/bad-db-env-{{ inventory_hostname }}"
+        mkdir -p "${result_dir}"
+        health_code=$(curl -sS -o "${result_dir}/baseline-healthz.json" -w '%{http_code}' "{{ bad_db_env_health_url }}" || true)
+        ready_code=$(curl -sS -o "${result_dir}/baseline-readyz.json" -w '%{http_code}' "{{ bad_db_env_ready_url }}" || true)
+        dependencies_code=$(curl -sS -o "${result_dir}/baseline-dependencies.json" -w '%{http_code}' "{{ bad_db_env_dependencies_url }}" || true)
+        echo "result_dir=${result_dir}"
+        echo "baseline_health_code=${health_code}"
+        echo "baseline_ready_code=${ready_code}"
+        echo "baseline_dependencies_code=${dependencies_code}"
+      args:
+        executable: /bin/bash
+      register: bad_db_env_baseline_probe
+      changed_when: false
+
+    - name: Initialize bad DB env validation facts
+      ansible.builtin.set_fact:
+        bad_db_env_failure_observed: false
+        bad_db_env_rollback_attempted: false
+        bad_db_env_result_dir: "{{ bad_db_env_baseline_probe.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+        bad_db_env_baseline_health_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_health_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_baseline_ready_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_ready_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_baseline_dependencies_code: "{{ bad_db_env_baseline_probe.stdout | regex_search('baseline_dependencies_code=([^\n]+)', '\\1') | first }}"
+
+    - name: Run bad DB env change and rollback validation with guaranteed restore
+      block:
+        - name: Apply intentionally invalid DB URL to systemd environment file
+          ansible.builtin.lineinfile:
+            path: "{{ bad_db_env_env_file }}"
+            regexp: "^OPS_DB_URL="
+            line: "OPS_DB_URL={{ bad_db_env_invalid_db_url }}"
+            create: false
+          no_log: true
+
+        - name: Mark deployment slot as bad DB env candidate
+          ansible.builtin.lineinfile:
+            path: "{{ bad_db_env_env_file }}"
+            regexp: "^OPS_DEPLOYMENT_SLOT="
+            line: "OPS_DEPLOYMENT_SLOT=bad-db-env-candidate"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Mark deployment id as bad DB env candidate
+          ansible.builtin.lineinfile:
+            path: "{{ bad_db_env_env_file }}"
+            regexp: "^OPS_DEPLOYMENT_ID="
+            line: "OPS_DEPLOYMENT_ID={{ bad_db_env_marker_id }}"
+            insertafter: EOF
+            create: false
+          no_log: true
+
+        - name: Restart service with intentionally invalid DB environment
+          ansible.builtin.systemd:
+            name: ops-sample-service
+            state: restarted
+            daemon_reload: true
+          register: bad_db_env_restart_result
+          failed_when: false
+
+        - name: Wait for service port after bad DB env restart
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ ops_app_port }}"
+            timeout: 60
+
+        - name: Capture bad DB env HTTP behavior
+          ansible.builtin.shell: |
+            set -euo pipefail
+            result_dir="{{ bad_db_env_result_dir }}"
+            health_code=$(curl -sS -o "${result_dir}/bad-healthz.json" -w '%{http_code}' "{{ bad_db_env_health_url }}" || true)
+            ready_code=$(curl -sS -o "${result_dir}/bad-readyz.json" -w '%{http_code}' "{{ bad_db_env_ready_url }}" || true)
+            dependencies_code=$(curl -sS -o "${result_dir}/bad-dependencies.json" -w '%{http_code}' "{{ bad_db_env_dependencies_url }}" || true)
+            python3 - "${result_dir}/bad-dependencies.json" <<'PY'
+            import json
+            import sys
+            data = json.load(open(sys.argv[1]))
+            summary = data.get("summary", {})
+            deps = data.get("dependencies", {})
+            print(f"dependency_status={data.get('status')}")
+            print(f"summary_ready={str(summary.get('ready')).lower()}")
+            print(f"summary_app={summary.get('app')}")
+            print(f"summary_db={summary.get('db')}")
+            print(f"summary_db_pool={summary.get('dbPool')}")
+            print(f"summary_storage={summary.get('storage')}")
+            print(f"db_dependency_status={deps.get('db', {}).get('status')}")
+            print(f"db_pool_dependency_status={deps.get('dbPool', {}).get('status')}")
+            print(f"storage_ready={str(deps.get('storage', {}).get('ready')).lower()}")
+            PY
+            echo "bad_health_code=${health_code}"
+            echo "bad_ready_code=${ready_code}"
+            echo "bad_dependencies_code=${dependencies_code}"
+          args:
+            executable: /bin/bash
+          register: bad_db_env_failure_probe
+          changed_when: false
+          failed_when: false
+
+        - name: Capture bad DB env app journal excerpt
+          ansible.builtin.shell: |
+            set -euo pipefail
+            journalctl -u ops-sample-service --no-pager --since '-5 min' | tail -n 80 > "{{ bad_db_env_result_dir }}/bad-db-env-journal.txt" || true
+            tail -n 30 "{{ bad_db_env_result_dir }}/bad-db-env-journal.txt" || true
+          args:
+            executable: /bin/bash
+          register: bad_db_env_journal_excerpt
+          changed_when: false
+          failed_when: false
+
+        - name: Record whether bad DB env failure was observable and properly isolated
+          ansible.builtin.set_fact:
+            bad_db_env_health_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_health_code=([^\n]+)', '\\1') | first }}"
+            bad_db_env_ready_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_ready_code=([^\n]+)', '\\1') | first }}"
+            bad_db_env_dependencies_code: "{{ bad_db_env_failure_probe.stdout | regex_search('bad_dependencies_code=([^\n]+)', '\\1') | first }}"
+            bad_db_env_dependency_status: "{{ bad_db_env_failure_probe.stdout | regex_search('dependency_status=([^\n]+)', '\\1') | first }}"
+            bad_db_env_summary_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_ready=([^\n]+)', '\\1') | first }}"
+            bad_db_env_summary_app: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_app=([^\n]+)', '\\1') | first }}"
+            bad_db_env_summary_db: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db=([^\n]+)', '\\1') | first }}"
+            bad_db_env_summary_db_pool: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_db_pool=([^\n]+)', '\\1') | first }}"
+            bad_db_env_summary_storage: "{{ bad_db_env_failure_probe.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | first }}"
+            bad_db_env_storage_ready: "{{ bad_db_env_failure_probe.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | first }}"
+            bad_db_env_failure_observed: >-
+              {{
+                (bad_db_env_failure_probe.stdout | regex_search('bad_health_code=([^\n]+)', '\\1') | first) == '200'
+                and (bad_db_env_failure_probe.stdout | regex_search('bad_ready_code=([^\n]+)', '\\1') | first) == '503'
+                and (bad_db_env_failure_probe.stdout | regex_search('bad_dependencies_code=([^\n]+)', '\\1') | first) == '503'
+                and (bad_db_env_failure_probe.stdout | regex_search('summary_app=([^\n]+)', '\\1') | first) == 'UP'
+                and (bad_db_env_failure_probe.stdout | regex_search('summary_db=([^\n]+)', '\\1') | first) == 'DOWN'
+                and (bad_db_env_failure_probe.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | first) == 'UP'
+                and (bad_db_env_failure_probe.stdout | regex_search('storage_ready=([^\n]+)', '\\1') | first) == 'true'
+              }}
+
+      always:
+        - name: Restore previous environment file during bad DB env rollback
+          ansible.builtin.copy:
+            src: "{{ bad_db_env_backup_file }}"
+            dest: "{{ bad_db_env_env_file }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+
+        - name: Restart service after bad DB env rollback
+          ansible.builtin.systemd:
+            name: ops-sample-service
+            state: restarted
+            daemon_reload: true
+          register: bad_db_env_rollback_restart
+          failed_when: false
+
+        - name: Record bad DB env rollback attempt
+          ansible.builtin.set_fact:
+            bad_db_env_rollback_attempted: true
+
+    - name: Wait for rollback HTTP port after env restore
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ ops_app_port }}"
+        timeout: 60
+
+    - name: Capture rollback local health, readiness, and dependency summary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ bad_db_env_result_dir }}"
+        health_code=$(curl -sS -o "${result_dir}/rollback-healthz.json" -w '%{http_code}' "{{ bad_db_env_health_url }}" || true)
+        ready_code=$(curl -sS -o "${result_dir}/rollback-readyz.json" -w '%{http_code}' "{{ bad_db_env_ready_url }}" || true)
+        dependencies_code=$(curl -sS -o "${result_dir}/rollback-dependencies.json" -w '%{http_code}' "{{ bad_db_env_dependencies_url }}" || true)
+        python3 - "${result_dir}/rollback-dependencies.json" <<'PY'
+        import json
+        import sys
+        data = json.load(open(sys.argv[1]))
+        summary = data.get("summary", {})
+        print(f"rollback_dependency_status={data.get('status')}")
+        print(f"rollback_summary_ready={str(summary.get('ready')).lower()}")
+        print(f"rollback_summary_app={summary.get('app')}")
+        print(f"rollback_summary_db={summary.get('db')}")
+        print(f"rollback_summary_db_pool={summary.get('dbPool')}")
+        print(f"rollback_summary_storage={summary.get('storage')}")
+        PY
+        echo "rollback_health_code=${health_code}"
+        echo "rollback_ready_code=${ready_code}"
+        echo "rollback_dependencies_code=${dependencies_code}"
+      args:
+        executable: /bin/bash
+      register: bad_db_env_rollback_probe
+      changed_when: false
+
+    - name: Extract rollback validation values
+      ansible.builtin.set_fact:
+        bad_db_env_rollback_health_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_health_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_ready_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_ready_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_dependencies_code: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependencies_code=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_dependency_status: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_dependency_status=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_summary_ready: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_ready=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_summary_app: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_app=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_summary_db: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_db=([^\n]+)', '\\1') | first }}"
+        bad_db_env_rollback_summary_storage: "{{ bad_db_env_rollback_probe.stdout | regex_search('rollback_summary_storage=([^\n]+)', '\\1') | first }}"
+
+    - name: Capture final service state after bad DB env rollback
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      register: bad_db_env_final_service_state
+      changed_when: false
+
+    - name: Write bad DB env rollback validation report
+      ansible.builtin.copy:
+        dest: "{{ bad_db_env_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default(ops_app_environment) }}
+          validation=lab-full-ops-bad-db-env-rollback-validation
+          inventory_hostname={{ inventory_hostname }}
+          service_name=ops-sample-service
+          env_file={{ bad_db_env_env_file }}
+          env_backup={{ bad_db_env_backup_file }}
+          bad_db_env_marker_id={{ bad_db_env_marker_id }}
+          failure_layer=was-db-env-dependency
+          baseline_health_code={{ bad_db_env_baseline_health_code | default('n/a') }}
+          baseline_ready_code={{ bad_db_env_baseline_ready_code | default('n/a') }}
+          baseline_dependencies_code={{ bad_db_env_baseline_dependencies_code | default('n/a') }}
+          bad_health_code={{ bad_db_env_health_code | default('n/a') }}
+          bad_ready_code={{ bad_db_env_ready_code | default('n/a') }}
+          bad_dependencies_code={{ bad_db_env_dependencies_code | default('n/a') }}
+          bad_dependency_status={{ bad_db_env_dependency_status | default('n/a') }}
+          bad_summary_ready={{ bad_db_env_summary_ready | default('n/a') }}
+          bad_summary_app={{ bad_db_env_summary_app | default('n/a') }}
+          bad_summary_db={{ bad_db_env_summary_db | default('n/a') }}
+          bad_summary_db_pool={{ bad_db_env_summary_db_pool | default('n/a') }}
+          bad_summary_storage={{ bad_db_env_summary_storage | default('n/a') }}
+          bad_storage_ready={{ bad_db_env_storage_ready | default('n/a') }}
+          bad_env_failure_observed={{ bad_db_env_failure_observed | default(false) }}
+          rollback_attempted={{ bad_db_env_rollback_attempted | default(false) }}
+          rollback_restart_status={{ bad_db_env_rollback_restart.status | default(bad_db_env_rollback_restart.rc | default('n/a')) }}
+          rollback_health_code={{ bad_db_env_rollback_health_code | default('n/a') }}
+          rollback_ready_code={{ bad_db_env_rollback_ready_code | default('n/a') }}
+          rollback_dependencies_code={{ bad_db_env_rollback_dependencies_code | default('n/a') }}
+          rollback_dependency_status={{ bad_db_env_rollback_dependency_status | default('n/a') }}
+          rollback_summary_ready={{ bad_db_env_rollback_summary_ready | default('n/a') }}
+          rollback_summary_app={{ bad_db_env_rollback_summary_app | default('n/a') }}
+          rollback_summary_db={{ bad_db_env_rollback_summary_db | default('n/a') }}
+          rollback_summary_storage={{ bad_db_env_rollback_summary_storage | default('n/a') }}
+          final_service_state={{ bad_db_env_final_service_state.stdout | default('n/a') }}
+          journal_excerpt={{ bad_db_env_journal_excerpt.stdout | default('n/a') }}
+          result_dir={{ bad_db_env_result_dir }}
+          rollback_status={{ 'validated' if bad_db_env_failure_observed | bool and bad_db_env_final_service_state.stdout == 'active' and bad_db_env_rollback_health_code == '200' and bad_db_env_rollback_ready_code == '200' and bad_db_env_rollback_dependencies_code == '200' else 'check_required' }}
+
+    - name: Display bad DB env rollback validation report
+      ansible.builtin.command: "cat {{ bad_db_env_report_file }}"
+      register: bad_db_env_report
+      changed_when: false
+
+    - name: Show bad DB env rollback validation report
+      ansible.builtin.debug:
+        var: bad_db_env_report.stdout_lines
+
+    - name: Assert bad DB env failure and rollback were both validated
+      ansible.builtin.assert:
+        that:
+          - bad_db_env_failure_observed | bool
+          - bad_db_env_rollback_attempted | bool
+          - bad_db_env_final_service_state.stdout == 'active'
+          - bad_db_env_rollback_health_code == '200'
+          - bad_db_env_rollback_ready_code == '200'
+          - bad_db_env_rollback_dependencies_code == '200'
+          - bad_db_env_rollback_dependency_status == 'ready'
+          - bad_db_env_rollback_summary_ready == 'true'
+          - bad_db_env_rollback_summary_db == 'UP'
+          - bad_db_env_rollback_summary_storage == 'UP'
+        fail_msg: >-
+          Bad DB env rollback scenario did not fully validate. The previous environment file was restored;
+          inspect {{ bad_db_env_report_file }}, {{ bad_db_env_result_dir }}, systemctl status ops-sample-service, and journalctl -u ops-sample-service.
+
+- name: Run postflight after bad DB env rollback validation
+  ansible.builtin.import_playbook: lab-full-ops-postflight-check.yml
