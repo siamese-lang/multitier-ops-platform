@@ -9,6 +9,7 @@
 #   -> environment rollback
 #   -> postflight business workflow validation
 #   -> CHG-style work-order trace validation
+#   -> change closeout acceptance validation
 #   -> evidence bundle archive/fetch
 #
 # Run it only during a planned lab-full-ops runtime validation window.
@@ -17,5 +18,7 @@
 - import_playbook: lab-full-ops-bad-db-env-rollback-validation.yml
 
 - import_playbook: lab-full-ops-change-request-trace-validation.yml
+
+- import_playbook: lab-full-ops-change-closeout-acceptance.yml
 
 - import_playbook: lab-full-ops-v1-1-fetch-evidence-bundle.yml
