@@ -1,0 +1,333 @@
+---
+- name: Validate change closeout acceptance after v1.1 operating-change trace
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    closeout_request_prefix: lab-full-ops-closeout-acceptance
+    closeout_report_dir: /tmp/multitier-ops-platform
+    closeout_result_dir: "{{ closeout_report_dir }}/lab-full-ops-change-closeout-acceptance"
+    closeout_report_file: "{{ closeout_report_dir }}/lab-full-ops-change-closeout-acceptance-{{ inventory_hostname }}.txt"
+    closeout_base_url: https://127.0.0.1
+    closeout_app_host: "{{ groups['app'][0] | default('app-01') }}"
+    closeout_db_host: "{{ groups['db'][0] | default('db-primary-01') }}"
+    closeout_storage_host: "{{ groups['storage'][0] | default('nfs-01') }}"
+    closeout_db_name: "{{ ops_db_name | default('opsdb') }}"
+    closeout_nfs_export_root: /srv/ops-sample/files
+    closeout_change_title: CHG-001 WAS DB connection setting rollback validation
+
+  pre_tasks:
+    - name: Assert required inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - closeout_app_host in groups['app']
+          - closeout_db_host in groups['db']
+          - closeout_storage_host in groups['storage']
+        fail_msg: "closeout acceptance requires app, db, and storage inventory groups."
+
+    - name: Show closeout acceptance boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook validates whether CHG-001 can be closed after v1.1 operating-change evidence."
+          - "It checks service readiness, the latest CHG work-order state, DB event history, NFS evidence object consistency, and request-id logs."
+          - "It does not create AWS resources, install packages, or require private subnet NAT egress."
+
+  tasks:
+    - name: Ensure closeout result directory exists
+      ansible.builtin.file:
+        path: "{{ closeout_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate current service readiness through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ closeout_result_dir }}"
+        base_url="{{ closeout_base_url }}"
+        request_prefix="{{ closeout_request_prefix }}"
+        mkdir -p "${result_dir}"
+
+        healthz_json="${result_dir}/healthz.json"
+        readyz_json="${result_dir}/readyz.json"
+        dependencies_json="${result_dir}/dependencies.json"
+
+        health_code=$(curl -k -sS -o "${healthz_json}" -w '%{http_code}' \
+          -H "X-Request-Id: ${request_prefix}-healthz" \
+          "${base_url}/healthz" || true)
+        ready_code=$(curl -k -sS -o "${readyz_json}" -w '%{http_code}' \
+          -H "X-Request-Id: ${request_prefix}-readyz" \
+          "${base_url}/readyz" || true)
+        dependencies_code=$(curl -k -sS -o "${dependencies_json}" -w '%{http_code}' \
+          -H "X-Request-Id: ${request_prefix}-dependencies" \
+          "${base_url}/api/ops/dependencies" || true)
+
+        python3 - "${dependencies_json}" <<'PY'
+        import json
+        import sys
+        data = json.load(open(sys.argv[1], encoding="utf-8"))
+        summary = data.get("summary", {})
+        deps = data.get("dependencies", {})
+        assert data.get("status") == "ready", data
+        assert summary.get("ready") is True, summary
+        assert summary.get("app") == "UP", summary
+        assert summary.get("db") == "UP", summary
+        assert summary.get("dbPool") == "UP", summary
+        assert summary.get("storage") == "UP", summary
+        assert deps.get("db", {}).get("status") == "UP", deps
+        assert deps.get("dbPool", {}).get("status") == "UP", deps
+        assert deps.get("storage", {}).get("ready") is True, deps
+        print(f"dependency_status={data.get('status')}")
+        print(f"summary_ready={str(summary.get('ready')).lower()}")
+        print(f"summary_app={summary.get('app')}")
+        print(f"summary_db={summary.get('db')}")
+        print(f"summary_db_pool={summary.get('dbPool')}")
+        print(f"summary_storage={summary.get('storage')}")
+        PY
+
+        echo "health_code=${health_code}"
+        echo "ready_code=${ready_code}"
+        echo "dependencies_code=${dependencies_code}"
+        echo "result_dir=${result_dir}"
+      args:
+        executable: /bin/bash
+      register: closeout_readiness
+      changed_when: false
+
+    - name: Extract readiness values
+      ansible.builtin.set_fact:
+        closeout_health_code: "{{ closeout_readiness.stdout | regex_search('health_code=([^\n]+)', '\\1') | first }}"
+        closeout_ready_code: "{{ closeout_readiness.stdout | regex_search('ready_code=([^\n]+)', '\\1') | first }}"
+        closeout_dependencies_code: "{{ closeout_readiness.stdout | regex_search('dependencies_code=([^\n]+)', '\\1') | first }}"
+        closeout_dependency_status: "{{ closeout_readiness.stdout | regex_search('dependency_status=([^\n]+)', '\\1') | first }}"
+        closeout_summary_ready: "{{ closeout_readiness.stdout | regex_search('summary_ready=([^\n]+)', '\\1') | first }}"
+        closeout_summary_app: "{{ closeout_readiness.stdout | regex_search('summary_app=([^\n]+)', '\\1') | first }}"
+        closeout_summary_db: "{{ closeout_readiness.stdout | regex_search('summary_db=([^\n]+)', '\\1') | first }}"
+        closeout_summary_storage: "{{ closeout_readiness.stdout | regex_search('summary_storage=([^\n]+)', '\\1') | first }}"
+        closeout_result_dir: "{{ closeout_readiness.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert current service readiness is acceptable for change closeout
+      ansible.builtin.assert:
+        that:
+          - closeout_health_code == '200'
+          - closeout_ready_code == '200'
+          - closeout_dependencies_code == '200'
+          - closeout_dependency_status == 'ready'
+          - closeout_summary_ready == 'true'
+          - closeout_summary_app == 'UP'
+          - closeout_summary_db == 'UP'
+          - closeout_summary_storage == 'UP'
+        fail_msg: "Service readiness is not acceptable for change closeout. Check {{ closeout_result_dir }} on nginx-01."
+
+    - name: Locate latest CHG-001 work-order directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ closeout_db_name | quote }} -AtF $'\t' -c \
+          "select id, status, priority, requester, assignee, description from ops_work_orders where title = '{{ closeout_change_title }}' order by id desc limit 1;"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ closeout_db_host }}"
+      register: closeout_db_latest_work_order
+      changed_when: false
+      failed_when: closeout_db_latest_work_order.rc != 0 or closeout_db_latest_work_order.stdout | length == 0
+
+    - name: Extract latest CHG-001 work-order id and status
+      ansible.builtin.set_fact:
+        closeout_work_order_id: "{{ closeout_db_latest_work_order.stdout.split('\t')[0] }}"
+        closeout_work_order_status: "{{ closeout_db_latest_work_order.stdout.split('\t')[1] }}"
+        closeout_work_order_priority: "{{ closeout_db_latest_work_order.stdout.split('\t')[2] }}"
+        closeout_work_order_requester: "{{ closeout_db_latest_work_order.stdout.split('\t')[3] }}"
+        closeout_work_order_assignee: "{{ closeout_db_latest_work_order.stdout.split('\t')[4] }}"
+
+    - name: Verify CHG-001 event history and evidence metadata directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        work_order_id="{{ closeout_work_order_id | int }}"
+        db_name={{ closeout_db_name | quote }}
+
+        sudo -u postgres psql -d "${db_name}" -AtF $'\t' -c \
+          "select event_type, coalesce(from_status, ''), coalesce(to_status, ''), actor from ops_work_order_events where work_order_id = ${work_order_id} order by id;" \
+          > "{{ closeout_result_dir }}/db-events.tsv"
+
+        sudo -u postgres psql -d "${db_name}" -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where work_order_id = ${work_order_id} order by id desc limit 1;" \
+          > "{{ closeout_result_dir }}/db-evidence.tsv"
+
+        cat "{{ closeout_result_dir }}/db-events.tsv"
+        echo "---evidence---"
+        cat "{{ closeout_result_dir }}/db-evidence.tsv"
+
+        grep -q $'CREATED\t\tOPEN\tops-change-manager' "{{ closeout_result_dir }}/db-events.tsv"
+        grep -q $'STATUS_CHANGED\tOPEN\tIN_PROGRESS\twas-operator' "{{ closeout_result_dir }}/db-events.tsv"
+        grep -q $'STATUS_CHANGED\tIN_PROGRESS\tDONE\tops-change-manager' "{{ closeout_result_dir }}/db-events.tsv"
+        test -s "{{ closeout_result_dir }}/db-evidence.tsv"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ closeout_db_host }}"
+      register: closeout_db_trace_rows
+      changed_when: false
+
+    - name: Extract latest CHG-001 evidence metadata from DB result
+      ansible.builtin.set_fact:
+        closeout_evidence_line: "{{ closeout_db_trace_rows.stdout.split('---evidence---')[-1].strip().split('\n')[-1] }}"
+        closeout_evidence_id: "{{ closeout_db_trace_rows.stdout.split('---evidence---')[-1].strip().split('\n')[-1].split('\t')[0] }}"
+        closeout_storage_path: "{{ closeout_db_trace_rows.stdout.split('---evidence---')[-1].strip().split('\n')[-1].split('\t')[3] }}"
+        closeout_evidence_size_bytes: "{{ closeout_db_trace_rows.stdout.split('---evidence---')[-1].strip().split('\n')[-1].split('\t')[4] }}"
+        closeout_evidence_sha256: "{{ closeout_db_trace_rows.stdout.split('---evidence---')[-1].strip().split('\n')[-1].split('\t')[5] }}"
+
+    - name: Verify latest CHG-001 evidence object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ closeout_nfs_export_root }}/{{ closeout_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ closeout_evidence_size_bytes }}"
+        test "$sha" = "{{ closeout_evidence_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ closeout_storage_host }}"
+      register: closeout_nfs_object
+      changed_when: false
+
+    - name: Verify CHG-001 API consistency through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result_dir="{{ closeout_result_dir }}"
+        base_url="{{ closeout_base_url }}"
+        request_prefix="{{ closeout_request_prefix }}"
+        consistency_json="${result_dir}/change-evidence-consistency.json"
+        events_json="${result_dir}/change-events.json"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-events" \
+          "${base_url}/api/work-orders/{{ closeout_work_order_id }}/events" > "${events_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-consistency" \
+          "${base_url}/api/work-orders/{{ closeout_work_order_id }}/evidence-files/{{ closeout_evidence_id }}/consistency" > "${consistency_json}"
+
+        python3 - "${events_json}" "${consistency_json}" <<'PY'
+        import json
+        import sys
+        events = json.load(open(sys.argv[1], encoding="utf-8"))["data"]
+        consistency_doc = json.load(open(sys.argv[2], encoding="utf-8"))
+        consistency = consistency_doc["consistency"]
+        assert any(e.get("toStatus") == "IN_PROGRESS" for e in events), events
+        assert any(e.get("toStatus") == "DONE" for e in events), events
+        assert consistency_doc.get("status") == "consistent", consistency_doc
+        assert consistency.get("consistent") is True, consistency
+        assert consistency.get("fileExists") is True, consistency
+        assert consistency.get("sizeMatches") is True, consistency
+        assert consistency.get("checksumMatches") is True, consistency
+        print(f"api_event_count={len(events)}")
+        print("api_in_progress_event_found=true")
+        print("api_done_event_found=true")
+        print(f"api_consistency_status={consistency_doc.get('status')}")
+        print(f"api_consistent={str(consistency.get('consistent')).lower()}")
+        print(f"api_file_exists={str(consistency.get('fileExists')).lower()}")
+        print(f"api_size_matches={str(consistency.get('sizeMatches')).lower()}")
+        print(f"api_checksum_matches={str(consistency.get('checksumMatches')).lower()}")
+        PY
+      args:
+        executable: /bin/bash
+      register: closeout_api_consistency
+      changed_when: false
+
+    - name: Extract API consistency values
+      ansible.builtin.set_fact:
+        closeout_api_event_count: "{{ closeout_api_consistency.stdout | regex_search('api_event_count=([^\n]+)', '\\1') | first }}"
+        closeout_api_consistency_status: "{{ closeout_api_consistency.stdout | regex_search('api_consistency_status=([^\n]+)', '\\1') | first }}"
+        closeout_api_consistent: "{{ closeout_api_consistency.stdout | regex_search('api_consistent=([^\n]+)', '\\1') | first }}"
+        closeout_api_file_exists: "{{ closeout_api_consistency.stdout | regex_search('api_file_exists=([^\n]+)', '\\1') | first }}"
+        closeout_api_size_matches: "{{ closeout_api_consistency.stdout | regex_search('api_size_matches=([^\n]+)', '\\1') | first }}"
+        closeout_api_checksum_matches: "{{ closeout_api_consistency.stdout | regex_search('api_checksum_matches=([^\n]+)', '\\1') | first }}"
+
+    - name: Read recent Nginx request-id log evidence for closeout acceptance
+      ansible.builtin.shell: "grep '{{ closeout_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 20 || true"
+      register: closeout_nginx_log
+      changed_when: false
+
+    - name: Read recent app journald request-id log evidence for closeout acceptance
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ closeout_request_prefix }}' | tail -n 20 || true"
+      delegate_to: "{{ closeout_app_host }}"
+      register: closeout_app_log
+      changed_when: false
+
+    - name: Write change closeout acceptance report
+      ansible.builtin.copy:
+        dest: "{{ closeout_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          validation=lab-full-ops-change-closeout-acceptance
+          scenario=chg_001_closeout_acceptance
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          app_host={{ closeout_app_host }}
+          db_host={{ closeout_db_host }}
+          storage_host={{ closeout_storage_host }}
+          health_code={{ closeout_health_code }}
+          ready_code={{ closeout_ready_code }}
+          dependencies_code={{ closeout_dependencies_code }}
+          dependency_status={{ closeout_dependency_status }}
+          summary_ready={{ closeout_summary_ready }}
+          summary_app={{ closeout_summary_app }}
+          summary_db={{ closeout_summary_db }}
+          summary_storage={{ closeout_summary_storage }}
+          work_order_id={{ closeout_work_order_id }}
+          work_order_status={{ closeout_work_order_status }}
+          work_order_priority={{ closeout_work_order_priority }}
+          work_order_requester={{ closeout_work_order_requester }}
+          work_order_assignee={{ closeout_work_order_assignee }}
+          evidence_id={{ closeout_evidence_id }}
+          storage_path={{ closeout_storage_path }}
+          evidence_size_bytes={{ closeout_evidence_size_bytes }}
+          evidence_sha256={{ closeout_evidence_sha256 }}
+          db_trace_rows={{ closeout_db_trace_rows.stdout | default('n/a') }}
+          nfs_object_check={{ closeout_nfs_object.stdout | default('n/a') }}
+          api_event_count={{ closeout_api_event_count }}
+          api_consistency_status={{ closeout_api_consistency_status }}
+          api_consistent={{ closeout_api_consistent }}
+          api_file_exists={{ closeout_api_file_exists }}
+          api_size_matches={{ closeout_api_size_matches }}
+          api_checksum_matches={{ closeout_api_checksum_matches }}
+          nginx_log_sample={{ closeout_nginx_log.stdout | default('n/a') }}
+          app_log_host={{ closeout_app_host }}
+          app_log_sample={{ closeout_app_log.stdout | default('n/a') }}
+          result_dir={{ closeout_result_dir }}
+          acceptance_status={{ 'validated' if closeout_work_order_status == 'DONE' and closeout_health_code == '200' and closeout_ready_code == '200' and closeout_dependencies_code == '200' and closeout_api_consistent == 'true' and closeout_api_file_exists == 'true' and closeout_api_size_matches == 'true' and closeout_api_checksum_matches == 'true' else 'check_required' }}
+
+    - name: Display change closeout acceptance report
+      ansible.builtin.command: "cat {{ closeout_report_file }}"
+      register: closeout_report
+      changed_when: false
+
+    - name: Show change closeout acceptance report
+      ansible.builtin.debug:
+        var: closeout_report.stdout_lines
+
+    - name: Assert CHG-001 closeout acceptance was validated
+      ansible.builtin.assert:
+        that:
+          - closeout_work_order_status == 'DONE'
+          - closeout_health_code == '200'
+          - closeout_ready_code == '200'
+          - closeout_dependencies_code == '200'
+          - closeout_dependency_status == 'ready'
+          - closeout_api_consistency_status == 'consistent'
+          - closeout_api_consistent == 'true'
+          - closeout_api_file_exists == 'true'
+          - closeout_api_size_matches == 'true'
+          - closeout_api_checksum_matches == 'true'
+        fail_msg: >-
+          CHG-001 closeout acceptance did not validate. Inspect {{ closeout_report_file }},
+          {{ closeout_result_dir }}, DB event rows, NFS object checks, and request-id logs.
