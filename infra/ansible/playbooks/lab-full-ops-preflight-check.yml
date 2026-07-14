@@ -1,0 +1,196 @@
+---
+- name: Run lab-full-ops preflight check before operating change
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    preflight_request_prefix: lab-full-ops-preflight
+    preflight_report_dir: /tmp/multitier-ops-platform
+    preflight_result_dir: "{{ preflight_report_dir }}/lab-full-ops-preflight"
+    preflight_report_file: "{{ preflight_report_dir }}/lab-full-ops-preflight-{{ inventory_hostname }}.txt"
+    preflight_base_url: https://127.0.0.1
+    preflight_app_host: "{{ groups['app'][0] | default('app-01') }}"
+    preflight_db_host: "{{ groups['db'][0] | default('db-primary-01') }}"
+    preflight_storage_host: "{{ groups['storage'][0] | default('nfs-01') }}"
+    preflight_app_storage_mount: /mnt/ops-sample/files
+    preflight_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert required inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - preflight_app_host in groups['app']
+          - preflight_db_host in groups['db']
+          - preflight_storage_host in groups['storage']
+        fail_msg: "lab-full-ops preflight requires app, db, and storage inventory groups."
+
+    - name: Show preflight validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook is a pre-change operating check for lab-full-ops."
+          - "It validates WEB, WAS, DB, HikariCP dependency summary, and app-side NFS readiness before a change."
+          - "It does not create runtime resources and should be run only against an existing lab-full-ops environment."
+
+  tasks:
+    - name: Ensure preflight result directory exists
+      ansible.builtin.file:
+        path: "{{ preflight_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate Nginx config before any change
+      ansible.builtin.command: nginx -t
+      register: preflight_nginx_config
+      changed_when: false
+
+    - name: Validate Nginx service is active
+      ansible.builtin.command: systemctl is-active nginx
+      register: preflight_nginx_active
+      changed_when: false
+      failed_when: preflight_nginx_active.stdout.strip() != 'active'
+
+    - name: Validate app service is active
+      ansible.builtin.command: systemctl is-active ops-sample-service
+      delegate_to: "{{ preflight_app_host }}"
+      register: preflight_app_active
+      changed_when: false
+      failed_when: preflight_app_active.stdout.strip() != 'active'
+
+    - name: Validate PostgreSQL service is active
+      ansible.builtin.command: systemctl is-active postgresql
+      delegate_to: "{{ preflight_db_host }}"
+      register: preflight_db_active
+      changed_when: false
+      failed_when: preflight_db_active.stdout.strip() != 'active'
+
+    - name: Validate DB accepts a direct local query
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ preflight_db_name | quote }} -Atc 'select 1;'
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ preflight_db_host }}"
+      register: preflight_db_query
+      changed_when: false
+      failed_when: preflight_db_query.stdout.strip() != '1'
+
+    - name: Validate app-side NFS mount is present
+      ansible.builtin.command: "mountpoint -q {{ preflight_app_storage_mount }}"
+      delegate_to: "{{ preflight_app_host }}"
+      register: preflight_mountpoint
+      changed_when: false
+
+    - name: Validate app-side NFS mount is writable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        probe_dir="{{ preflight_app_storage_mount }}/.ops-preflight"
+        probe_file="${probe_dir}/{{ preflight_request_prefix }}-$(date -u +%Y%m%dT%H%M%SZ)-{{ inventory_hostname }}.txt"
+        mkdir -p "${probe_dir}"
+        printf 'preflight=%s\ncreatedAt=%s\n' '{{ preflight_request_prefix }}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${probe_file}"
+        test -s "${probe_file}"
+        sha256sum "${probe_file}"
+        rm -f "${probe_file}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ preflight_app_host }}"
+      register: preflight_storage_write
+      changed_when: true
+
+    - name: Validate process health through Nginx
+      ansible.builtin.uri:
+        url: "{{ preflight_base_url }}/healthz"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Request-Id: "{{ preflight_request_prefix }}-healthz"
+        return_content: true
+        status_code: 200
+      register: preflight_healthz
+
+    - name: Validate business readiness through Nginx
+      ansible.builtin.uri:
+        url: "{{ preflight_base_url }}/readyz"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Request-Id: "{{ preflight_request_prefix }}-readyz"
+        return_content: true
+        status_code: 200
+      register: preflight_readyz
+
+    - name: Validate dependency summary through Nginx
+      ansible.builtin.uri:
+        url: "{{ preflight_base_url }}/api/ops/dependencies"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Request-Id: "{{ preflight_request_prefix }}-dependencies"
+        return_content: true
+        status_code: 200
+      register: preflight_dependencies
+
+    - name: Assert dependency summary separates healthy runtime dependencies
+      ansible.builtin.assert:
+        that:
+          - preflight_dependencies.json.check == 'dependencies'
+          - preflight_dependencies.json.status == 'ready'
+          - preflight_dependencies.json.summary.ready | bool
+          - preflight_dependencies.json.summary.app == 'UP'
+          - preflight_dependencies.json.summary.db == 'UP'
+          - preflight_dependencies.json.summary.dbPool == 'UP'
+          - preflight_dependencies.json.summary.storage == 'UP'
+          - preflight_dependencies.json.dependencies.db.status == 'UP'
+          - preflight_dependencies.json.dependencies.dbPool.status == 'UP'
+          - preflight_dependencies.json.dependencies.storage.ready | bool
+        fail_msg: "Dependency summary is not ready. Check /api/ops/dependencies output."
+
+    - name: Validate release metadata through Nginx
+      ansible.builtin.uri:
+        url: "{{ preflight_base_url }}/version"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Request-Id: "{{ preflight_request_prefix }}-version"
+        return_content: true
+        status_code: 200
+      register: preflight_version
+
+    - name: Write lab-full-ops preflight report
+      ansible.builtin.copy:
+        dest: "{{ preflight_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          validation=lab-full-ops-preflight-check
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          app_host={{ preflight_app_host }}
+          db_host={{ preflight_db_host }}
+          storage_host={{ preflight_storage_host }}
+          nginx_config={{ preflight_nginx_config.stderr | default(preflight_nginx_config.stdout) }}
+          nginx_active={{ preflight_nginx_active.stdout | default('n/a') }}
+          app_active={{ preflight_app_active.stdout | default('n/a') }}
+          db_active={{ preflight_db_active.stdout | default('n/a') }}
+          db_query={{ preflight_db_query.stdout | default('n/a') }}
+          app_storage_mount={{ preflight_app_storage_mount }}
+          app_storage_write={{ preflight_storage_write.stdout | default('n/a') }}
+          healthz_status={{ preflight_healthz.status | default('n/a') }}
+          readyz_status={{ preflight_readyz.status | default('n/a') }}
+          dependencies_status={{ preflight_dependencies.status | default('n/a') }}
+          dependencies_summary={{ preflight_dependencies.json.summary | default({}) | to_json }}
+          version={{ preflight_version.json.version | default('n/a') }}
+          result_dir={{ preflight_result_dir }}
+
+    - name: Display lab-full-ops preflight report
+      ansible.builtin.command: "cat {{ preflight_report_file }}"
+      register: preflight_report
+      changed_when: false
+
+    - name: Show lab-full-ops preflight report
+      ansible.builtin.debug:
+        var: preflight_report.stdout_lines
