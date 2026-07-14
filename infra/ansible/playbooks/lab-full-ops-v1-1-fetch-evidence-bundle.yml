@@ -24,6 +24,8 @@
     v1_1_postflight_report_file: "{{ v1_1_report_dir }}/lab-full-ops-postflight-{{ inventory_hostname }}.txt"
     v1_1_bad_db_env_result_dir: "{{ v1_1_report_dir }}/bad-db-env-{{ inventory_hostname }}"
     v1_1_bad_db_env_report_file: "{{ v1_1_report_dir }}/lab-full-ops-bad-db-env-rollback-{{ inventory_hostname }}.txt"
+    v1_1_change_trace_result_dir: "{{ v1_1_report_dir }}/lab-full-ops-change-request-trace"
+    v1_1_change_trace_report_file: "{{ v1_1_report_dir }}/lab-full-ops-change-request-trace-{{ inventory_hostname }}.txt"
 
   pre_tasks:
     - name: Assert this evidence bundle task runs on WEB or APP hosts
@@ -35,8 +37,8 @@
     - name: Show v1.1 evidence bundle boundary
       ansible.builtin.debug:
         msg:
-          - "This playbook archives v1.1 preflight, bad DB env rollback, and postflight evidence."
-          - "Run after lab-full-ops-bad-db-env-rollback-validation.yml and before AWS lab cleanup."
+          - "This playbook archives v1.1 preflight, bad DB env rollback, postflight, and optional change-request trace evidence."
+          - "Run after the v1.1 operating-change validation path and before AWS lab cleanup."
           - "Local destination: {{ v1_1_local_archive_dir }}"
 
   tasks:
@@ -64,7 +66,7 @@
           echo "ansible_host={{ ansible_host | default('n/a') }}"
           echo "groups={{ group_names | join(',') }}"
           echo "created_at={{ ansible_facts.date_time.iso8601 | default('manual') }}"
-          echo "scenario=preflight_bad_db_env_rollback_postflight"
+          echo "scenario=preflight_bad_db_env_rollback_postflight_change_trace"
           echo "staging_dir=${stage}"
           echo "archive_file={{ v1_1_remote_archive_file }}"
           echo
@@ -75,6 +77,11 @@
           echo "summary.app=UP"
           echo "summary.db=DOWN"
           echo "summary.storage=UP"
+          echo
+          echo "[change request trace]"
+          echo "trace.validation=lab-full-ops-change-request-trace-validation"
+          echo "trace.scenario=chg_001_was_db_env_rollback_trace"
+          echo "trace.expected_status=DONE"
           echo
           echo "[collected files]"
         } > "${manifest}"
@@ -102,8 +109,10 @@
           copy_candidate "{{ v1_1_preflight_result_dir }}" "results/$(basename "{{ v1_1_preflight_result_dir }}")" required
           copy_candidate "{{ v1_1_postflight_report_file }}" "reports/$(basename "{{ v1_1_postflight_report_file }}")" required
           copy_candidate "{{ v1_1_postflight_result_dir }}" "results/$(basename "{{ v1_1_postflight_result_dir }}")" required
+          copy_candidate "{{ v1_1_change_trace_report_file }}" "reports/$(basename "{{ v1_1_change_trace_report_file }}")" optional
+          copy_candidate "{{ v1_1_change_trace_result_dir }}" "results/$(basename "{{ v1_1_change_trace_result_dir }}")" optional
 
-          grep 'lab-full-ops-preflight\|lab-full-ops-postflight' /var/log/nginx/ops_access.log \
+          grep 'lab-full-ops-preflight\|lab-full-ops-postflight\|lab-full-ops-change-trace' /var/log/nginx/ops_access.log \
             > "${stage}/logs/nginx-v1-1-request-ids.log" 2>/dev/null || true
           systemctl status nginx --no-pager > "${stage}/logs/nginx-systemd-status.txt" 2>&1 || true
           nginx -t > "${stage}/logs/nginx-config-test.txt" 2>&1 || true
