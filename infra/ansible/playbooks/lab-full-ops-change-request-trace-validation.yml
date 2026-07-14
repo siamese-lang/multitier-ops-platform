@@ -1,0 +1,371 @@
+---
+- name: Validate operating change request trace through work-order, DB, and NFS evidence
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    change_trace_request_prefix: lab-full-ops-change-trace
+    change_trace_report_dir: /tmp/multitier-ops-platform
+    change_trace_result_dir: "{{ change_trace_report_dir }}/lab-full-ops-change-request-trace"
+    change_trace_report_file: "{{ change_trace_report_dir }}/lab-full-ops-change-request-trace-{{ inventory_hostname }}.txt"
+    change_trace_base_url: https://127.0.0.1
+    change_trace_app_host: "{{ groups['app'][0] | default('app-01') }}"
+    change_trace_db_host: "{{ groups['db'][0] | default('db-primary-01') }}"
+    change_trace_storage_host: "{{ groups['storage'][0] | default('nfs-01') }}"
+    change_trace_db_name: "{{ ops_db_name | default('opsdb') }}"
+    change_trace_nfs_export_root: /srv/ops-sample/files
+    change_trace_existing_v1_1_report: /tmp/multitier-ops-platform/lab-full-ops-bad-db-env-rollback-app-01.txt
+
+  pre_tasks:
+    - name: Assert required inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - change_trace_app_host in groups['app']
+          - change_trace_db_host in groups['db']
+          - change_trace_storage_host in groups['storage']
+        fail_msg: "change-request trace validation requires app, db, and storage inventory groups."
+
+    - name: Show validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook links the v1.1 operating-change scenario to a work-order trace."
+          - "It creates a CHG-style work order, records execution status, verifies prior rollback evidence, checks DB rows, checks the NFS evidence object, and writes a trace report."
+          - "It does not install packages, create AWS resources, or require private subnet NAT egress."
+
+  tasks:
+    - name: Ensure change trace result directory exists
+      ansible.builtin.file:
+        path: "{{ change_trace_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Verify v1.1 rollback report exists before creating trace
+      ansible.builtin.stat:
+        path: "{{ change_trace_existing_v1_1_report }}"
+      delegate_to: "{{ change_trace_app_host }}"
+      register: change_trace_v1_1_report_stat
+
+    - name: Assert v1.1 rollback report exists
+      ansible.builtin.assert:
+        that:
+          - change_trace_v1_1_report_stat.stat.exists
+        fail_msg: >-
+          v1.1 rollback report was not found on {{ change_trace_app_host }} at {{ change_trace_existing_v1_1_report }}.
+          Run lab-full-ops-v1-1-operating-change-validation.yml first.
+
+    - name: Read v1.1 rollback evidence values from app host
+      ansible.builtin.shell: |
+        set -euo pipefail
+        report="{{ change_trace_existing_v1_1_report }}"
+        grep -E '^(validation|bad_health_code|bad_ready_code|bad_dependencies_code|bad_env_failure_observed|rollback_attempted|rollback_health_code|rollback_ready_code|rollback_dependencies_code|rollback_status)=' "$report"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ change_trace_app_host }}"
+      register: change_trace_v1_1_values
+      changed_when: false
+
+    - name: Assert prior v1.1 rollback evidence is valid
+      ansible.builtin.assert:
+        that:
+          - "'bad_health_code=200' in change_trace_v1_1_values.stdout"
+          - "'bad_ready_code=503' in change_trace_v1_1_values.stdout"
+          - "'bad_dependencies_code=503' in change_trace_v1_1_values.stdout"
+          - "'bad_env_failure_observed=True' in change_trace_v1_1_values.stdout or 'bad_env_failure_observed=true' in change_trace_v1_1_values.stdout"
+          - "'rollback_attempted=True' in change_trace_v1_1_values.stdout or 'rollback_attempted=true' in change_trace_v1_1_values.stdout"
+          - "'rollback_health_code=200' in change_trace_v1_1_values.stdout"
+          - "'rollback_ready_code=200' in change_trace_v1_1_values.stdout"
+          - "'rollback_dependencies_code=200' in change_trace_v1_1_values.stdout"
+          - "'rollback_status=validated' in change_trace_v1_1_values.stdout"
+        fail_msg: "Existing v1.1 rollback report does not contain the expected validated failure and rollback values."
+
+    - name: Create CHG-style work-order trace and verify evidence consistency through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ change_trace_result_dir }}"
+        base_url="{{ change_trace_base_url }}"
+        request_prefix="{{ change_trace_request_prefix }}"
+        mkdir -p "${result_dir}"
+
+        dependencies_json="${result_dir}/dependencies-before-change-trace.json"
+        create_payload_json="${result_dir}/change-work-order-create-payload.json"
+        create_json="${result_dir}/change-work-order-create.json"
+        in_progress_payload_json="${result_dir}/change-work-order-in-progress-payload.json"
+        in_progress_json="${result_dir}/change-work-order-in-progress.json"
+        evidence_create_json="${result_dir}/change-work-order-evidence-create.json"
+        evidence_consistency_json="${result_dir}/change-work-order-evidence-consistency.json"
+        done_payload_json="${result_dir}/change-work-order-done-payload.json"
+        done_json="${result_dir}/change-work-order-done.json"
+        events_json="${result_dir}/change-work-order-events.json"
+        audit_logs_json="${result_dir}/change-work-order-audit-logs.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-dependencies-before" \
+          "${base_url}/api/ops/dependencies" > "${dependencies_json}"
+
+        python3 - "${dependencies_json}" <<'PY'
+        import json
+        import sys
+        data = json.load(open(sys.argv[1], encoding="utf-8"))
+        summary = data.get("summary", {})
+        assert data.get("status") == "ready", data
+        assert summary.get("ready") is True, summary
+        assert summary.get("app") == "UP", summary
+        assert summary.get("db") == "UP", summary
+        assert summary.get("storage") == "UP", summary
+        PY
+
+        cat > "${create_payload_json}" <<'EOF'
+        {
+          "title": "CHG-001 WAS DB connection setting rollback validation",
+          "priority": "HIGH",
+          "requester": "ops-change-manager",
+          "assignee": "was-operator",
+          "description": "Trace the v1.1 controlled bad DB environment change, failure isolation, rollback, and postflight validation as an operating change request."
+        }
+        EOF
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-create" \
+          -H "Content-Type: application/json" \
+          -X POST "${base_url}/api/work-orders" \
+          --data @"${create_payload_json}" \
+          > "${create_json}"
+
+        work_order_id=$(python3 -c "import json; print(json.load(open('${create_json}', encoding='utf-8'))['data']['id'])")
+        created_status=$(python3 -c "import json; print(json.load(open('${create_json}', encoding='utf-8'))['data']['status'])")
+        test "${created_status}" = "OPEN"
+
+        cat > "${in_progress_payload_json}" <<'EOF'
+        {
+          "status": "IN_PROGRESS",
+          "actor": "was-operator",
+          "message": "Change execution started: controlled WAS DB environment change was validated and rollback evidence will be attached."
+        }
+        EOF
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-in-progress" \
+          -H "Content-Type: application/json" \
+          -X PATCH "${base_url}/api/work-orders/${work_order_id}/status" \
+          --data @"${in_progress_payload_json}" \
+          > "${in_progress_json}"
+
+        in_progress_status=$(python3 -c "import json; print(json.load(open('${in_progress_json}', encoding='utf-8'))['data']['status'])")
+        test "${in_progress_status}" = "IN_PROGRESS"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-create" \
+          -X POST "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_create_json}"
+
+        evidence_id=$(python3 -c "import json; print(json.load(open('${evidence_create_json}', encoding='utf-8'))['data']['id'])")
+        storage_path=$(python3 -c "import json; print(json.load(open('${evidence_create_json}', encoding='utf-8'))['data']['storagePath'])")
+        evidence_size_bytes=$(python3 -c "import json; print(json.load(open('${evidence_create_json}', encoding='utf-8'))['data']['sizeBytes'])")
+        evidence_sha256=$(python3 -c "import json; print(json.load(open('${evidence_create_json}', encoding='utf-8'))['data']['sha256'])")
+        create_consistent=$(python3 -c "import json; print(str(json.load(open('${evidence_create_json}', encoding='utf-8'))['consistency']['consistent']).lower())")
+        test "${create_consistent}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${evidence_consistency_json}"
+
+        consistency_status=$(python3 -c "import json; print(json.load(open('${evidence_consistency_json}', encoding='utf-8'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${evidence_consistency_json}', encoding='utf-8'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${evidence_consistency_json}', encoding='utf-8'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${evidence_consistency_json}', encoding='utf-8'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${evidence_consistency_json}', encoding='utf-8'))['consistency']['checksumMatches']).lower())")
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+
+        cat > "${done_payload_json}" <<'EOF'
+        {
+          "status": "DONE",
+          "actor": "ops-change-manager",
+          "message": "Change trace completed: dependency failure was isolated, rollback evidence was validated, and post-change evidence consistency was confirmed."
+        }
+        EOF
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-done" \
+          -H "Content-Type: application/json" \
+          -X PATCH "${base_url}/api/work-orders/${work_order_id}/status" \
+          --data @"${done_payload_json}" \
+          > "${done_json}"
+
+        final_status=$(python3 -c "import json; print(json.load(open('${done_json}', encoding='utf-8'))['data']['status'])")
+        test "${final_status}" = "DONE"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-events" \
+          "${base_url}/api/work-orders/${work_order_id}/events" \
+          > "${events_json}"
+
+        event_count=$(python3 -c "import json; print(len(json.load(open('${events_json}', encoding='utf-8'))['data']))")
+        in_progress_event_found=$(python3 -c "import json; data=json.load(open('${events_json}', encoding='utf-8'))['data']; print(str(any(e.get('toStatus') == 'IN_PROGRESS' for e in data)).lower())")
+        done_event_found=$(python3 -c "import json; data=json.load(open('${events_json}', encoding='utf-8'))['data']; print(str(any(e.get('toStatus') == 'DONE' for e in data)).lower())")
+        test "${in_progress_event_found}" = "true"
+        test "${done_event_found}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-audit-logs" \
+          "${base_url}/api/audit-logs?limit=30" \
+          > "${audit_logs_json}"
+        audit_count=$(python3 -c "import json; print(len(json.load(open('${audit_logs_json}', encoding='utf-8'))['data']))")
+
+        cat > "${parsed_kv}" <<EOF
+        work_order_id=${work_order_id}
+        created_status=${created_status}
+        in_progress_status=${in_progress_status}
+        final_status=${final_status}
+        event_count=${event_count}
+        in_progress_event_found=${in_progress_event_found}
+        done_event_found=${done_event_found}
+        evidence_id=${evidence_id}
+        storage_path=${storage_path}
+        evidence_size_bytes=${evidence_size_bytes}
+        evidence_sha256=${evidence_sha256}
+        create_consistent=${create_consistent}
+        consistency_status=${consistency_status}
+        consistent=${consistent}
+        file_exists=${file_exists}
+        size_matches=${size_matches}
+        checksum_matches=${checksum_matches}
+        audit_count=${audit_count}
+        result_dir=${result_dir}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: change_trace_workflow
+      changed_when: true
+
+    - name: Extract change trace workflow values
+      ansible.builtin.set_fact:
+        change_trace_work_order_id: "{{ change_trace_workflow.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        change_trace_final_status: "{{ change_trace_workflow.stdout | regex_search('final_status=([^\n]+)', '\\1') | first }}"
+        change_trace_event_count: "{{ change_trace_workflow.stdout | regex_search('event_count=([^\n]+)', '\\1') | first }}"
+        change_trace_in_progress_event_found: "{{ change_trace_workflow.stdout | regex_search('in_progress_event_found=([^\n]+)', '\\1') | first }}"
+        change_trace_done_event_found: "{{ change_trace_workflow.stdout | regex_search('done_event_found=([^\n]+)', '\\1') | first }}"
+        change_trace_evidence_id: "{{ change_trace_workflow.stdout | regex_search('evidence_id=([^\n]+)', '\\1') | first }}"
+        change_trace_storage_path: "{{ change_trace_workflow.stdout | regex_search('storage_path=([^\n]+)', '\\1') | first }}"
+        change_trace_evidence_size_bytes: "{{ change_trace_workflow.stdout | regex_search('evidence_size_bytes=([^\n]+)', '\\1') | first }}"
+        change_trace_evidence_sha256: "{{ change_trace_workflow.stdout | regex_search('evidence_sha256=([^\n]+)', '\\1') | first }}"
+        change_trace_consistent: "{{ change_trace_workflow.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        change_trace_file_exists: "{{ change_trace_workflow.stdout | regex_search('file_exists=([^\n]+)', '\\1') | first }}"
+        change_trace_size_matches: "{{ change_trace_workflow.stdout | regex_search('size_matches=([^\n]+)', '\\1') | first }}"
+        change_trace_checksum_matches: "{{ change_trace_workflow.stdout | regex_search('checksum_matches=([^\n]+)', '\\1') | first }}"
+        change_trace_result_dir: "{{ change_trace_workflow.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert change request trace completed
+      ansible.builtin.assert:
+        that:
+          - change_trace_final_status == 'DONE'
+          - change_trace_in_progress_event_found == 'true'
+          - change_trace_done_event_found == 'true'
+          - change_trace_consistent == 'true'
+          - change_trace_file_exists == 'true'
+          - change_trace_size_matches == 'true'
+          - change_trace_checksum_matches == 'true'
+        fail_msg: "Change request trace did not complete. Check {{ change_trace_result_dir }} on nginx-01."
+
+    - name: Verify change work-order and evidence rows directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ change_trace_db_name | quote }} -AtF $'\t' -c \
+          "select id, title, status, priority, requester, assignee from ops_work_orders where id = {{ change_trace_work_order_id | int }};"
+        sudo -u postgres psql -d {{ change_trace_db_name | quote }} -AtF $'\t' -c \
+          "select event_type, from_status, to_status, actor from ops_work_order_events where work_order_id = {{ change_trace_work_order_id | int }} order by id;"
+        sudo -u postgres psql -d {{ change_trace_db_name | quote }} -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ change_trace_evidence_id | int }} and work_order_id = {{ change_trace_work_order_id | int }};"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ change_trace_db_host }}"
+      register: change_trace_db_rows
+      changed_when: false
+      failed_when: change_trace_db_rows.rc != 0 or change_trace_db_rows.stdout | length == 0
+
+    - name: Verify change evidence file object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ change_trace_nfs_export_root }}/{{ change_trace_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ change_trace_evidence_size_bytes }}"
+        test "$sha" = "{{ change_trace_evidence_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ change_trace_storage_host }}"
+      register: change_trace_nfs_object
+      changed_when: false
+
+    - name: Read recent Nginx request-id log evidence for change trace
+      ansible.builtin.shell: "grep '{{ change_trace_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 40 || true"
+      register: change_trace_nginx_log
+      changed_when: false
+
+    - name: Read recent app journald request-id log evidence for change trace
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ change_trace_request_prefix }}' | tail -n 40 || true"
+      delegate_to: "{{ change_trace_app_host }}"
+      register: change_trace_app_log
+      changed_when: false
+
+    - name: Write change request trace validation report
+      ansible.builtin.copy:
+        dest: "{{ change_trace_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          validation=lab-full-ops-change-request-trace-validation
+          scenario=chg_001_was_db_env_rollback_trace
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          app_host={{ change_trace_app_host }}
+          db_host={{ change_trace_db_host }}
+          storage_host={{ change_trace_storage_host }}
+          prior_v1_1_report={{ change_trace_existing_v1_1_report }}
+          prior_v1_1_values={{ change_trace_v1_1_values.stdout | replace('\n', '; ') }}
+          work_order_id={{ change_trace_work_order_id }}
+          final_status={{ change_trace_final_status }}
+          event_count={{ change_trace_event_count }}
+          in_progress_event_found={{ change_trace_in_progress_event_found }}
+          done_event_found={{ change_trace_done_event_found }}
+          evidence_id={{ change_trace_evidence_id }}
+          storage_path={{ change_trace_storage_path }}
+          evidence_size_bytes={{ change_trace_evidence_size_bytes }}
+          evidence_sha256={{ change_trace_evidence_sha256 }}
+          api_consistent={{ change_trace_consistent }}
+          file_exists={{ change_trace_file_exists }}
+          size_matches={{ change_trace_size_matches }}
+          checksum_matches={{ change_trace_checksum_matches }}
+          db_rows={{ change_trace_db_rows.stdout | default('n/a') }}
+          nfs_object_check={{ change_trace_nfs_object.stdout | default('n/a') }}
+          nginx_log_sample={{ change_trace_nginx_log.stdout | default('n/a') }}
+          app_log_host={{ change_trace_app_host }}
+          app_log_sample={{ change_trace_app_log.stdout | default('n/a') }}
+          result_dir={{ change_trace_result_dir }}
+          trace_status=validated
+
+    - name: Display change request trace validation report
+      ansible.builtin.command: "cat {{ change_trace_report_file }}"
+      register: change_trace_report
+      changed_when: false
+
+    - name: Show change request trace validation report
+      ansible.builtin.debug:
+        var: change_trace_report.stdout_lines
