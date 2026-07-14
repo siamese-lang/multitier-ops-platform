@@ -1,0 +1,18 @@
+---
+# End-to-end v1.1 operating-change validation.
+#
+# This playbook intentionally keeps v1.1 as one closed operating procedure:
+#
+#   preflight
+#   -> controlled bad DB environment change
+#   -> dependency failure isolation
+#   -> environment rollback
+#   -> postflight business workflow validation
+#   -> evidence bundle archive/fetch
+#
+# Run it only during a planned lab-full-ops runtime validation window.
+# It does not create or destroy AWS resources.
+
+- import_playbook: lab-full-ops-bad-db-env-rollback-validation.yml
+
+- import_playbook: lab-full-ops-v1-1-fetch-evidence-bundle.yml
