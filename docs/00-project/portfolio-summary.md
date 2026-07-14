@@ -9,12 +9,29 @@ AWS EC2 기반 다계층 업무시스템 운영환경 구축 및 장애·복구 
 ## One-line summary
 
 ```text
-작업 요청·증빙 파일 관리형 경량 웹 서비스를 EC2 VM 기반 WEB/WAS/DB/Storage/Backup/Observability 계층 위에 구성하고, 장애·성능·복구 상황을 로그·지표·HTTP 응답·DB row·파일 checksum으로 검증하는 운영 포트폴리오
+작업 요청·증빙 파일 관리형 경량 웹 서비스를 EC2 VM 기반 WEB/WAS/DB/Storage/Backup/Observability 계층 위에 구성하고, 장애·성능·복구 상황을 HTTP 응답·로그·systemd 상태·DB row·pg_stat_activity·파일 checksum으로 검증한 운영 포트폴리오
+```
+
+## What this project is
+
+This project is an operations portfolio, not a feature-development showcase.
+
+It demonstrates that a small but realistic operated workload can be deployed on separated VM-style tiers, and that failures can be diagnosed by checking the right layer with evidence.
+
+```text
+운영 대상 서비스
+-> Nginx WEB tier
+-> Spring Boot embedded Tomcat WAS process
+-> HikariCP DB connection pool
+-> PostgreSQL metadata DB
+-> NFS file storage
+-> pg_dump/restic backup and restore-lab validation
+-> node_exporter/Prometheus observability evidence
 ```
 
 ## Operated service
 
-The operated service is `ops-sample-service`.
+The operated workload is `ops-sample-service`.
 
 Use this description:
 
@@ -25,66 +42,23 @@ Use this description:
 What the service does:
 
 ```text
-사용자는 작업 요청을 등록한다.
-운영자는 작업 요청 상세 화면에서 상태를 변경하고 조치 메모를 남긴다.
-운영자는 증빙 파일을 업로드하고 다운로드할 수 있다.
-PostgreSQL은 작업 요청, 상태 이력, 감사 로그, 파일 metadata를 저장한다.
-NFS/file storage는 실제 증빙 파일 object를 저장한다.
-Consistency API는 DB metadata와 file object의 크기·SHA-256 일치를 확인한다.
-Failure-lab endpoints는 WEB/WAS 지연, DB 지연, DB connection hold, HikariCP pool state, WAS runtime, file storage 상태, upload limit을 관찰하게 한다.
+- 사용자는 작업 요청을 등록한다.
+- 운영자는 작업 요청의 상태를 변경하고 조치 메모를 남긴다.
+- 증빙 파일을 업로드하고 다운로드할 수 있다.
+- PostgreSQL은 작업 요청, 상태 이력, 감사 로그, 파일 metadata를 저장한다.
+- NFS/file storage는 실제 증빙 파일 object를 저장한다.
+- Consistency API는 DB metadata와 file object의 크기·SHA-256 일치를 확인한다.
+- Failure-lab endpoints는 latency, DB dependency, DB connection pool, file storage 상태를 관찰하게 한다.
 ```
 
 Boundary:
 
 ```text
-This is a lightweight operations service, not a commercial ITSM clone or production service.
-The service exists to make WEB/WAS/DB/Storage/Backup operations scenarios concrete and explainable.
+This is a lightweight operations service.
+It is not a production service, commercial ITSM, ERP, groupware, or full asset-management system.
 ```
 
-## What this project is meant to prove
-
-This project is designed to prove operating capability, not feature development capability.
-
-It demonstrates that the operator can:
-
-```text
-1. Separate an application environment into WEB/WAS/DB/Storage/Backup/Observability tiers.
-2. Configure the tiers with repeatable Terraform and Ansible workflows.
-3. Validate normal request paths through Nginx, WAS, DB, and NFS-backed file storage.
-4. Reproduce failures and identify which tier should be inspected first.
-5. Use logs, service state, metrics, checksums, HTTP status, timing, and API responses as evidence.
-6. Distinguish embedded Tomcat request-thread pressure from HikariCP DB connection-pool pressure.
-7. Validate WEB-tier Nginx config rejection and rollback.
-8. Validate WAS artifact rollback with systemd, health, version, readiness, and DB-backed checks.
-9. Validate app-side NFS mount failure and recovery with DB/file consistency checks.
-10. Create backup artifacts and prove recovery in a separate restore-lab environment.
-11. Destroy temporary AWS lab resources after evidence collection.
-12. Keep application features small while making the operated service explainable.
-13. Document supported claims without overclaiming production maturity.
-```
-
-## Main runtime topology
-
-```text
-[Public Subnet]
-- bastion-01
-- nginx-01
-
-[Private App Subnet]
-- app-01
-
-[Private DB Subnet]
-- db-primary-01
-
-[Private Storage Subnet]
-- nfs-01
-
-[Private Ops Subnet]
-- backup-01
-- mon-01
-```
-
-Main request and operations path:
+## Runtime topology
 
 ```text
 operator -> nginx-01:443 -> app-01 embedded Tomcat -> HikariCP -> db-primary-01:5432
@@ -96,7 +70,9 @@ backup-01 -> nfs-01:/srv/ops-sample/files
 mon-01    -> node_exporter on WEB/WAS/DB/Storage/Backup nodes
 ```
 
-## Final runtime validation state
+## Final validation state
+
+2026-07-13 기준 AWS runtime validation은 완료했고, evidence 수집 후 lab 리소스는 삭제했습니다.
 
 ```text
 lab-full-ops AWS runtime validation: completed
@@ -113,284 +89,46 @@ Final summary document:
 docs/04-evidence/final-runtime-validation-2026-07-13.md
 ```
 
-## Key validation outcomes
-
-### 1. WEB/WAS/DB operating path
-
-Validated with runtime evidence:
-
-```text
-Nginx reverse proxy
-Spring Boot embedded Tomcat app service
-PostgreSQL DB connection
-health/readiness distinction
-Nginx access log and upstream evidence
-WAS failure and upstream bypass
-rolling restart continuity
-DB-backed concurrent request observation
-```
-
-### 2. DB metadata and NFS file consistency
-
-Validated with runtime evidence:
-
-```text
-NFS export and app mount
-work-order evidence file creation
-PostgreSQL metadata row creation
-NFS file object existence
-file size and SHA-256 match
-application consistency endpoint
-```
-
-### 3. Enhanced web workflow and upload/download path
-
-Validated with enhanced runtime evidence:
-
-```text
-work-order list/detail/create/status-change workflow through Nginx/WAS
-status history and audit log visibility
-evidence upload through multipart web form
-evidence download through web endpoint
-DB metadata and NFS file object consistency
-request ID correlation through Nginx and app logs
-```
-
-### 4. Upload-limit, latency, and DB web-impact scenarios
-
-Validated with enhanced runtime evidence:
-
-```text
-upload-limit incident validation
-WAS sleep vs DB sleep latency scenario validation
-DB web-impact incident validation
-health vs readiness distinction during DB service impact
-service recovery verification after controlled incident
-```
-
-### 5. Connection pressure validation
-
-Validated with bounded lab runtime evidence:
-
-```text
-embedded Tomcat request-thread pressure caused delayed but successful DB-backed summary response
-HikariCP connection-pool pressure caused DB-backed request failure while PostgreSQL stayed active
-Nginx access log, app journald, HikariCP state, PostgreSQL pg_stat_activity, and HTTP timing/status were correlated
-```
-
-Representative evidence:
-
-```text
-baseline_tomcat_max_threads=4
-baseline_hikari_max_pool_size=2
-was_summary_during_http_code=200
-was_summary_during_time_total=9.071659
-db_summary_during_http_code=503
-db_pool_active_connections=2
-db_pool_idle_connections=0
-PostgreSQL state=active, wait_event=PgSleep, query=select pg_sleep($1)
-```
-
-Supported interpretation:
-
-```text
-The project can distinguish a delayed API caused by WAS request-thread pressure from a failed DB-backed API caused by WAS-side DB connection-pool exhaustion.
-```
-
-### 6. Bad deployment rollback validation
-
-Validated with bounded lab runtime evidence:
-
-```text
-bad WAS artifact deployment produced observable service/health failure
-previous jar and environment file were restored
-rollback health check succeeded
-rollback version check succeeded
-rollback readiness check succeeded
-rollback DB-backed summary check succeeded
-final systemd service state returned to active
-```
-
-Supported interpretation:
-
-```text
-The project can identify a VM/systemd WAS artifact deployment failure and verify rollback with process, version, readiness, and DB-backed service checks.
-```
-
-### 7. NFS mount failure and recovery validation
-
-Validated with bounded lab runtime evidence:
-
-```text
-baseline NFS mount and file-storage readiness were healthy
-app-side NFS mount was intentionally unmounted
-file-storage readiness became false
-DB-backed work-order creation still returned 201 Created
-evidence-file creation returned 503 storage-not-ready
-NFS remount restored the storage path
-recovery evidence creation and consistency checks succeeded
-NFS file object existed with matching size and SHA-256
-```
-
-Supported interpretation:
-
-```text
-The project can distinguish a DB-backed business path that remains available from a file-storage-dependent path that fails due to app-side NFS mount loss.
-```
-
-### 8. Nginx config rollback validation
-
-Validated with bounded lab runtime evidence:
-
-```text
-baseline Nginx proxied health/version/summary checks succeeded
-invalid Nginx config candidate was written
-nginx -t rejected the bad candidate before unsafe reload
-running Nginx stayed active while the bad config existed on disk
-previous site config was restored
-restored nginx -t succeeded
-Nginx reload succeeded
-post-rollback health/version/summary checks succeeded
-```
-
-Supported interpretation:
-
-```text
-The project can validate WEB-tier config candidates before reload and restore a known-good Nginx config when a bad candidate is detected.
-```
-
-### 9. Backup artifact creation
-
-Validated with runtime evidence:
-
-```text
-pg_dump artifact for PostgreSQL metadata
-NFS file inventory and checksum evidence
-restic snapshot for file objects
-backup metadata and raw artifact preservation
-```
-
-Important boundary:
-
-```text
-Backup artifact creation alone is not a recovery claim.
-Recovery was proven separately in restore-lab.
-```
-
-### 10. Restore-lab recovery
-
-Validated with runtime evidence:
-
-```text
-separate restore-lab VPC
-pg_restore into restore DB node
-restic restore into restore NFS node
-application reads restored DB metadata and file object
-HTTP/API consistency through Nginx
-sample file size and SHA-256 match
-```
-
-Supported claim:
-
-```text
-Restore-lab DB/file/API recovery validation succeeded.
-```
-
-### 11. Observability and incident diagnosis
-
-Validated with runtime evidence:
-
-```text
-service state evidence
-Nginx request-path evidence
-application readiness and DB dependency evidence
-PostgreSQL service/port evidence
-node_exporter host metrics
-Prometheus scrape evidence
-Prometheus rule evaluation evidence
-```
-
-Supported diagnostic claims:
-
-```text
-Observability baseline evidence validated for EC2 WEB/WAS/DB/Storage/Backup diagnosis.
-Prometheus metrics helped distinguish DB host reachability from DB service dependency failure.
-Prometheus rule evaluation detected PostgreSQL service inactivity while the DB host remained reachable.
-```
-
-### 12. Runtime cleanup
-
-Validated after evidence collection:
-
-```text
-AWS lab runtime was destroyed after final validation.
-No new AWS runtime is planned by default.
-```
-
-## Interview-ready incident reports
-
-The incident report layer converts raw validation output into operations narratives.
-
-```text
-docs/05-incident-reports/README.md
-docs/05-incident-reports/enhanced-service-workflow-baseline-report.md
-docs/05-incident-reports/upload-limit-incident-report.md
-docs/05-incident-reports/latency-diagnosis-incident-report.md
-docs/05-incident-reports/db-web-impact-incident-report.md
-docs/05-incident-reports/restore-lab-recovery-incident-report.md
-docs/05-incident-reports/connection-pressure-incident-report.md
-```
-
-Recommended interview sequence:
-
-```text
-1. Start with the enhanced service workflow baseline.
-2. Explain upload-limit diagnosis as WEB/WAS/DB/NFS separation.
-3. Explain latency diagnosis as WAS-side delay vs DB-backed delay.
-4. Explain DB web-impact as health vs readiness and dependency failure.
-5. Explain connection pressure as embedded Tomcat thread pressure vs HikariCP pool exhaustion.
-6. Explain bad deployment rollback as VM/systemd WAS artifact rollback.
-7. Explain NFS mount failure as DB-backed path vs file-storage-dependent path separation.
-8. Explain Nginx config rollback as WEB-tier config validation before unsafe reload.
-9. Explain restore-lab as the difference between backup artifact creation and recovery proof.
-```
-
-Scenario-specific Q&A:
-
-```text
-docs/00-project/interview-incident-qna.md
-```
-
-Portfolio reading guide:
-
-```text
-docs/00-project/portfolio-review-guide.md
-```
-
-## Representative evidence documents
+Evidence map:
 
 ```text
 docs/04-evidence/evidence-index.md
-docs/04-evidence/final-runtime-validation-2026-07-13.md
-docs/00-project/current-state-after-enhanced-runtime-validation.md
-docs/04-evidence/lab-full-min-web-was-db-integrated-validation.md
-docs/04-evidence/lab-full-min-continuous-operations-validation.md
-docs/04-evidence/lab-full-ops-storage-validation-2026-07-12.md
-docs/04-evidence/lab-full-ops-backup-validation-2026-07-12.md
-docs/04-evidence/restore-lab-recovery-validation-2026-07-12.md
-docs/04-evidence/restore-lab-recovery-validation-2026-07-13.md
-docs/04-evidence/observability-baseline-validation-2026-07-12.md
-docs/04-evidence/observability-metrics-validation-2026-07-12.md
-docs/04-evidence/observability-alert-validation-2026-07-12.md
-docs/04-evidence/connection-pressure-validation-2026-07-13.md
 ```
 
-Service implementation references:
+## Representative validation scenarios
+
+Use these five scenarios as the main interview and portfolio storyline.
+
+| Scenario | What was validated | Evidence boundary |
+|---|---|---|
+| Nginx bad config detection and rollback | Invalid Nginx config candidate was rejected by `nginx -t`; known-good config was restored and reloaded; proxied health/version/summary checks succeeded | Not production change-management maturity, traffic safety guarantee, blue/green, or canary deployment |
+| Bad WAS artifact deployment and rollback | Bad jar deployment caused observable systemd/health failure; previous jar/env was restored; health, version, readiness, DB-backed summary, and systemd active state were verified | Not production release management, zero-downtime deployment, blue/green, or canary deployment |
+| Tomcat request-thread pressure vs HikariCP pool pressure | WAS request-thread pressure caused delayed but successful DB-backed response; HikariCP pool pressure caused DB-backed API failure while PostgreSQL remained active | Not production load testing, capacity sizing, SLO/SLA validation, or autoscaling evidence |
+| App-side NFS mount failure and recovery | DB-backed work-order creation remained available while file-storage-dependent evidence-file creation failed; remount restored DB metadata/NFS object/size/SHA-256 consistency | Not storage HA, automatic failover, NFS performance tuning, or chaos engineering |
+| Backup artifact vs restore-lab recovery proof | pg_dump/restic backup artifacts were created, then recovery was proven separately in restore-lab through DB/file/API consistency and checksum checks | Not production DR, RPO/RTO guarantee, continuous backup policy, or managed database recovery |
+
+## What this project proves
+
+The project supports these claims:
 
 ```text
-apps/ops-sample-service/README.md
-apps/ops-sample-service/FAILURE_LAB.md
-docs/00-project/ops-sample-service-completion-scope.md
+- EC2 VM 기반으로 WEB/WAS/DB/Storage/Backup/Observability 계층을 분리 구성했다.
+- 운영 대상 workload를 단순 hello world가 아니라 작업 요청·증빙 파일 관리형 서비스로 만들었다.
+- 정상 업무 흐름과 장애·복구 흐름을 HTTP 응답, 로그, systemd 상태, DB row, pg_stat_activity, file object, checksum으로 검증했다.
+- WAS request-thread pressure와 WAS-side DB connection-pool exhaustion을 구분했다.
+- 잘못된 WAS artifact 배포와 rollback을 systemd, health, version, readiness, DB-backed summary로 검증했다.
+- app-side NFS mount 장애가 DB-backed path와 file-storage-dependent path에 다르게 영향을 주는 것을 확인했다.
+- Nginx config candidate를 reload 전에 검증하고 known-good config 복구 후 proxy path 정상화를 확인했다.
+- backup artifact 생성과 restore-lab recovery proof를 구분했다.
+- 검증 후 AWS lab 리소스를 삭제했다.
+```
+
+## Safe interview framing
+
+Use this concise explanation:
+
+```text
+EC2를 VM 환경처럼 사용해 WEB/WAS/DB/Storage/Backup/Observability 계층을 나누고, 작업 요청·증빙 파일 관리형 경량 서비스를 운영 대상으로 구성했습니다. 이후 Nginx 설정 오류, WAS artifact 배포 실패, Tomcat/HikariCP pressure, NFS mount 장애, 백업·복구를 각각 검증하면서 HTTP 상태, 로그, systemd 상태, DB row, pg_stat_activity, 파일 checksum으로 원인과 복구 여부를 확인했습니다. 실제 상용 운영 경험이라고 주장하지는 않고, 운영 직무에서 필요한 계층별 확인 절차와 근거 기반 판단을 EC2 lab에서 정리한 포트폴리오로 설명합니다.
 ```
 
 ## Tools and their roles
@@ -405,87 +143,66 @@ docs/00-project/ops-sample-service-completion-scope.md
 | HikariCP | Exposes WAS-side DB connection-pool pressure evidence | Not production capacity sizing |
 | PostgreSQL | DB tier for work-order/event/audit/file metadata and pg_stat_activity checks | Not HA database engineering |
 | NFS | File storage tier for evidence file objects; mount failure and recovery target | Not storage product evaluation |
-| pg_dump/restic | Backup and restore tooling | Not backup product comparison |
+| pg_dump/restic | Backup artifact creation and restore-lab recovery validation tooling | Not backup product comparison |
 | node_exporter/Prometheus | Metrics evidence for diagnosis | Not a monitoring platform project |
-
-## Claims that are safe in an interview
-
-Runtime evidence claims:
-
-```text
-I built an EC2-based multi-tier operating environment with separated WEB/WAS/DB/Storage/Backup/Monitoring nodes.
-I validated normal and failure paths with evidence rather than only screenshots.
-I verified DB metadata and NFS file consistency with size and SHA-256 checks.
-I validated work-order and evidence-file web workflows through Nginx, WAS, PostgreSQL, and NFS.
-I tested upload-limit, latency, DB-impact, and connection-pressure scenarios as WEB/WAS operating incidents.
-I distinguished embedded Tomcat thread pressure from HikariCP pool exhaustion using HTTP timing/status, Nginx logs, app journald, HikariCP state, and PostgreSQL pg_stat_activity.
-I validated a bad WAS artifact rollback using systemd, health, version, readiness, and DB-backed summary checks.
-I validated an app-side NFS mount failure and recovery by separating DB-backed work-order behavior from file-storage-dependent evidence-file behavior.
-I validated Nginx bad config rejection with nginx -t and restored a known-good config before reloading the WEB tier.
-I created backup artifacts and then proved recovery in a separate restore-lab environment.
-I used logs, service state, request-path responses, and Prometheus metrics to narrow a DB service incident.
-I destroyed the temporary AWS lab after collecting evidence.
-```
-
-Service implementation claims:
-
-```text
-I implemented the operated service as a lightweight work-order and evidence-file web service.
-The service includes work-order pages, status history, audit logs, evidence upload/download, and failure-lab endpoints.
-```
-
-Careful boundary:
-
-```text
-This is lab runtime validation for an operations portfolio.
-It is not production operations experience, production load testing, production DR, HA, automatic failover, SLO/SLA, capacity sizing, external Tomcat administration, or RPO/RTO proof.
-```
 
 ## Claims that must not be made
 
 ```text
 production operations experience
+production incident response
 production-grade monitoring maturity
-Grafana dashboard readiness
-Alertmanager notification maturity
-paging or on-call workflow
-PostgreSQL HA
-automatic failover
-SLO/SLA compliance
-Kubernetes/EKS/GitOps operation
-AWS managed architecture operation
-commercial ITSM implementation
 production disaster recovery
 production load testing
 capacity sizing
-external Tomcat/WAR operation
+SLO/SLA compliance
 RPO/RTO guarantee
+PostgreSQL HA
+automatic failover
+storage HA
 blue-green/canary deployment
 zero-downtime release guarantee
-production storage HA
+external Tomcat/WAR operation
+Kubernetes/EKS/GitOps operation
+AWS managed architecture operation
+commercial ITSM implementation
 ```
 
-## Project hardening focus
+## Where to read next
+
+```text
+1. docs/00-project/portfolio-review-guide.md
+   - recommended review order and representative five-scenario sequence
+2. docs/04-evidence/evidence-index.md
+   - scenario-to-evidence and claim-to-evidence map
+3. docs/04-evidence/final-runtime-validation-2026-07-13.md
+   - final runtime validation and cleanup summary
+4. docs/00-project/interview-incident-qna.md
+   - spoken interview explanation layer
+5. docs/00-project/submission-description-notes.md
+   - application-form and portfolio URL wording
+```
+
+## Current hardening focus
 
 Runtime validation is now closed by default.
 
 Further work should focus on:
 
 ```text
-evidence-index quality
-incident report layer
-interview explanation notes
-portfolio submission wording
-README polish
+- README, portfolio-summary, evidence-index, and interview Q&A alignment
+- interview explanation notes
+- application-form wording
+- final repository polish
 ```
 
 Further work should not focus on:
 
 ```text
-more Prometheus features
-Grafana dashboards
-Alertmanager routing
-Loki expansion
-unplanned AWS runtime windows
-unrelated architecture expansion
+- more Prometheus features
+- Grafana dashboards
+- Alertmanager routing
+- Loki expansion
+- unplanned AWS runtime windows
+- unrelated architecture expansion
 ```
