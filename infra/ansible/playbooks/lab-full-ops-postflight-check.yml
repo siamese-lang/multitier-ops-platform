@@ -1,0 +1,334 @@
+---
+- name: Run lab-full-ops postflight check after operating change or rollback
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    postflight_request_prefix: lab-full-ops-postflight
+    postflight_report_dir: /tmp/multitier-ops-platform
+    postflight_result_dir: "{{ postflight_report_dir }}/lab-full-ops-postflight"
+    postflight_report_file: "{{ postflight_report_dir }}/lab-full-ops-postflight-{{ inventory_hostname }}.txt"
+    postflight_base_url: https://127.0.0.1
+    postflight_app_host: "{{ groups['app'][0] | default('app-01') }}"
+    postflight_db_host: "{{ groups['db'][0] | default('db-primary-01') }}"
+    postflight_storage_host: "{{ groups['storage'][0] | default('nfs-01') }}"
+    postflight_nfs_export_root: /srv/ops-sample/files
+    postflight_db_name: "{{ ops_db_name | default('opsdb') }}"
+
+  pre_tasks:
+    - name: Assert required inventory groups exist
+      ansible.builtin.assert:
+        that:
+          - groups['app'] is defined
+          - groups['db'] is defined
+          - groups['storage'] is defined
+          - postflight_app_host in groups['app']
+          - postflight_db_host in groups['db']
+          - postflight_storage_host in groups['storage']
+        fail_msg: "lab-full-ops postflight requires app, db, and storage inventory groups."
+
+    - name: Show postflight validation boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook verifies service recovery after an operating change or rollback."
+          - "It validates dependency summary, work-order creation, status update, evidence-file creation, DB metadata, NFS object, and checksum consistency."
+          - "It does not create runtime resources and should be run only against an existing lab-full-ops environment."
+
+  tasks:
+    - name: Ensure postflight result directory exists
+      ansible.builtin.file:
+        path: "{{ postflight_result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Validate service dependencies and post-change business workflow through Nginx
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        result_dir="{{ postflight_result_dir }}"
+        base_url="{{ postflight_base_url }}"
+        request_prefix="{{ postflight_request_prefix }}"
+
+        dependencies_json="${result_dir}/dependencies.json"
+        healthz_json="${result_dir}/healthz.json"
+        readyz_json="${result_dir}/readyz.json"
+        version_json="${result_dir}/version.json"
+        create_payload_json="${result_dir}/work-order-create-payload.json"
+        create_json="${result_dir}/work-order-create.json"
+        status_payload_json="${result_dir}/work-order-status-payload.json"
+        status_json="${result_dir}/work-order-status.json"
+        events_json="${result_dir}/work-order-events.json"
+        evidence_create_json="${result_dir}/evidence-create.json"
+        evidence_list_json="${result_dir}/evidence-list.json"
+        consistency_json="${result_dir}/evidence-consistency.json"
+        summary_json="${result_dir}/summary.json"
+        audit_logs_json="${result_dir}/audit-logs.json"
+        parsed_kv="${result_dir}/parsed-values.env"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-healthz" \
+          "${base_url}/healthz" > "${healthz_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-readyz" \
+          "${base_url}/readyz" > "${readyz_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-dependencies" \
+          "${base_url}/api/ops/dependencies" > "${dependencies_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-version" \
+          "${base_url}/version" > "${version_json}"
+
+        python3 - "${dependencies_json}" <<'PY'
+        import json
+        import sys
+        data = json.load(open(sys.argv[1]))
+        summary = data.get("summary", {})
+        assert data.get("check") == "dependencies", data
+        assert data.get("status") == "ready", data
+        assert summary.get("ready") is True, summary
+        assert summary.get("app") == "UP", summary
+        assert summary.get("db") == "UP", summary
+        assert summary.get("dbPool") == "UP", summary
+        assert summary.get("storage") == "UP", summary
+        deps = data.get("dependencies", {})
+        assert deps.get("db", {}).get("status") == "UP", deps
+        assert deps.get("dbPool", {}).get("status") == "UP", deps
+        assert deps.get("storage", {}).get("ready") is True, deps
+        PY
+
+        cat > "${create_payload_json}" <<EOF
+        {
+          "title": "Postflight validation after operating change",
+          "priority": "HIGH",
+          "requester": "ops-postflight",
+          "assignee": "ops-admin",
+          "description": "Validate service recovery after operating change or rollback."
+        }
+        EOF
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-create" \
+          -H "Content-Type: application/json" \
+          -X POST "${base_url}/api/work-orders" \
+          --data @"${create_payload_json}" \
+          > "${create_json}"
+
+        work_order_id=$(python3 -c "import json; print(json.load(open('${create_json}'))['data']['id'])")
+        work_order_status=$(python3 -c "import json; print(json.load(open('${create_json}'))['data']['status'])")
+        test "${work_order_status}" = "OPEN"
+
+        cat > "${status_payload_json}" <<EOF
+        {
+          "status": "DONE",
+          "actor": "ops-postflight",
+          "message": "Postflight check confirmed service is usable after operating change or rollback."
+        }
+        EOF
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-work-order-status" \
+          -H "Content-Type: application/json" \
+          -X PATCH "${base_url}/api/work-orders/${work_order_id}/status" \
+          --data @"${status_payload_json}" \
+          > "${status_json}"
+
+        updated_status=$(python3 -c "import json; print(json.load(open('${status_json}'))['data']['status'])")
+        test "${updated_status}" = "DONE"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-events" \
+          "${base_url}/api/work-orders/${work_order_id}/events" \
+          > "${events_json}"
+        event_count=$(python3 -c "import json; print(len(json.load(open('${events_json}'))['data']))")
+        done_event_found=$(python3 -c "import json; data=json.load(open('${events_json}'))['data']; print(str(any(e.get('toStatus') == 'DONE' for e in data)).lower())")
+        test "${done_event_found}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-create" \
+          -X POST "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_create_json}"
+
+        evidence_id=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['id'])")
+        storage_path=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['storagePath'])")
+        evidence_size_bytes=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['sizeBytes'])")
+        evidence_sha256=$(python3 -c "import json; print(json.load(open('${evidence_create_json}'))['data']['sha256'])")
+        create_consistent=$(python3 -c "import json; print(str(json.load(open('${evidence_create_json}'))['consistency']['consistent']).lower())")
+        test "${create_consistent}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-evidence-list" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files" \
+          > "${evidence_list_json}"
+        evidence_list_count=$(python3 -c "import json; print(len(json.load(open('${evidence_list_json}'))['data']))")
+        test "${evidence_list_count}" -ge 1
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-consistency" \
+          "${base_url}/api/work-orders/${work_order_id}/evidence-files/${evidence_id}/consistency" \
+          > "${consistency_json}"
+        consistency_status=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['status'])")
+        consistent=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['consistent']).lower())")
+        file_exists=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['fileExists']).lower())")
+        size_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['sizeMatches']).lower())")
+        checksum_matches=$(python3 -c "import json; print(str(json.load(open('${consistency_json}'))['consistency']['checksumMatches']).lower())")
+        resolved_path=$(python3 -c "import json; print(json.load(open('${consistency_json}'))['consistency']['resolvedPath'])")
+        test "${consistency_status}" = "consistent"
+        test "${consistent}" = "true"
+        test "${file_exists}" = "true"
+        test "${size_matches}" = "true"
+        test "${checksum_matches}" = "true"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-summary" \
+          "${base_url}/api/work-orders/summary" \
+          > "${summary_json}"
+
+        curl -k -fsS \
+          -H "X-Request-Id: ${request_prefix}-audit-logs" \
+          "${base_url}/api/audit-logs?limit=20" \
+          > "${audit_logs_json}"
+        audit_count=$(python3 -c "import json; print(len(json.load(open('${audit_logs_json}'))['data']))")
+
+        cat > "${parsed_kv}" <<EOF
+        work_order_id=${work_order_id}
+        work_order_status=${work_order_status}
+        updated_status=${updated_status}
+        event_count=${event_count}
+        done_event_found=${done_event_found}
+        evidence_id=${evidence_id}
+        storage_path=${storage_path}
+        evidence_size_bytes=${evidence_size_bytes}
+        evidence_sha256=${evidence_sha256}
+        create_consistent=${create_consistent}
+        consistency_status=${consistency_status}
+        consistent=${consistent}
+        file_exists=${file_exists}
+        size_matches=${size_matches}
+        checksum_matches=${checksum_matches}
+        resolved_path=${resolved_path}
+        audit_count=${audit_count}
+        result_dir=${result_dir}
+        EOF
+
+        cat "${parsed_kv}"
+      args:
+        executable: /bin/bash
+      register: postflight_business_workflow
+      changed_when: true
+
+    - name: Extract postflight business workflow values
+      ansible.builtin.set_fact:
+        postflight_work_order_id: "{{ postflight_business_workflow.stdout | regex_search('work_order_id=([^\n]+)', '\\1') | first }}"
+        postflight_updated_status: "{{ postflight_business_workflow.stdout | regex_search('updated_status=([^\n]+)', '\\1') | first }}"
+        postflight_event_count: "{{ postflight_business_workflow.stdout | regex_search('event_count=([^\n]+)', '\\1') | first }}"
+        postflight_done_event_found: "{{ postflight_business_workflow.stdout | regex_search('done_event_found=([^\n]+)', '\\1') | first }}"
+        postflight_evidence_id: "{{ postflight_business_workflow.stdout | regex_search('evidence_id=([^\n]+)', '\\1') | first }}"
+        postflight_storage_path: "{{ postflight_business_workflow.stdout | regex_search('storage_path=([^\n]+)', '\\1') | first }}"
+        postflight_evidence_size_bytes: "{{ postflight_business_workflow.stdout | regex_search('evidence_size_bytes=([^\n]+)', '\\1') | first }}"
+        postflight_evidence_sha256: "{{ postflight_business_workflow.stdout | regex_search('evidence_sha256=([^\n]+)', '\\1') | first }}"
+        postflight_consistent: "{{ postflight_business_workflow.stdout | regex_search('consistent=([^\n]+)', '\\1') | first }}"
+        postflight_file_exists: "{{ postflight_business_workflow.stdout | regex_search('file_exists=([^\n]+)', '\\1') | first }}"
+        postflight_size_matches: "{{ postflight_business_workflow.stdout | regex_search('size_matches=([^\n]+)', '\\1') | first }}"
+        postflight_checksum_matches: "{{ postflight_business_workflow.stdout | regex_search('checksum_matches=([^\n]+)', '\\1') | first }}"
+        postflight_result_dir: "{{ postflight_business_workflow.stdout | regex_search('result_dir=([^\n]+)', '\\1') | first }}"
+
+    - name: Assert postflight workflow completed successfully
+      ansible.builtin.assert:
+        that:
+          - postflight_updated_status == 'DONE'
+          - postflight_done_event_found == 'true'
+          - postflight_consistent == 'true'
+          - postflight_file_exists == 'true'
+          - postflight_size_matches == 'true'
+          - postflight_checksum_matches == 'true'
+        fail_msg: "Postflight business workflow did not return consistent values. Check {{ postflight_result_dir }} on nginx-01."
+
+    - name: Verify postflight work-order and evidence rows directly on db-primary-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u postgres psql -d {{ postflight_db_name | quote }} -AtF $'\t' -c \
+          "select id, status, requester, assignee from ops_work_orders where id = {{ postflight_work_order_id | int }};"
+        sudo -u postgres psql -d {{ postflight_db_name | quote }} -AtF $'\t' -c \
+          "select event_type, from_status, to_status, actor from ops_work_order_events where work_order_id = {{ postflight_work_order_id | int }} order by id;"
+        sudo -u postgres psql -d {{ postflight_db_name | quote }} -AtF $'\t' -c \
+          "select id, work_order_id, file_name, storage_path, size_bytes, sha256 from ops_work_order_evidence_files where id = {{ postflight_evidence_id | int }} and work_order_id = {{ postflight_work_order_id | int }};"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ postflight_db_host }}"
+      register: postflight_db_rows
+      changed_when: false
+      failed_when: postflight_db_rows.rc != 0 or postflight_db_rows.stdout | length == 0
+
+    - name: Verify postflight evidence file object directly on nfs-01
+      ansible.builtin.shell: |
+        set -euo pipefail
+        file="{{ postflight_nfs_export_root }}/{{ postflight_storage_path }}"
+        test -f "$file"
+        size=$(stat -c '%s' "$file")
+        sha=$(sha256sum "$file" | awk '{print $1}')
+        echo "file=${file}"
+        echo "size=${size}"
+        echo "sha256=${sha}"
+        test "$size" = "{{ postflight_evidence_size_bytes }}"
+        test "$sha" = "{{ postflight_evidence_sha256 }}"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ postflight_storage_host }}"
+      register: postflight_nfs_object
+      changed_when: false
+
+    - name: Read recent Nginx request-id log evidence for postflight
+      ansible.builtin.shell: "grep '{{ postflight_request_prefix }}' /var/log/nginx/ops_access.log | tail -n 30 || true"
+      register: postflight_nginx_log
+      changed_when: false
+
+    - name: Read recent app journald request-id log evidence for postflight
+      ansible.builtin.shell: "journalctl -u ops-sample-service --no-pager --since '-30 min' | grep '{{ postflight_request_prefix }}' | tail -n 30 || true"
+      delegate_to: "{{ postflight_app_host }}"
+      register: postflight_app_log
+      changed_when: false
+
+    - name: Write lab-full-ops postflight report
+      ansible.builtin.copy:
+        dest: "{{ postflight_report_file }}"
+        mode: "0644"
+        content: |
+          project={{ project_name | default('multitier-ops-platform') }}
+          environment={{ environment_name | default('lab-full-ops') }}
+          validation=lab-full-ops-postflight-check
+          inventory_hostname={{ inventory_hostname }}
+          ansible_host={{ ansible_host | default('n/a') }}
+          app_host={{ postflight_app_host }}
+          db_host={{ postflight_db_host }}
+          storage_host={{ postflight_storage_host }}
+          work_order_id={{ postflight_work_order_id }}
+          updated_status={{ postflight_updated_status }}
+          event_count={{ postflight_event_count }}
+          done_event_found={{ postflight_done_event_found }}
+          evidence_id={{ postflight_evidence_id }}
+          storage_path={{ postflight_storage_path }}
+          evidence_size_bytes={{ postflight_evidence_size_bytes }}
+          evidence_sha256={{ postflight_evidence_sha256 }}
+          api_consistent={{ postflight_consistent }}
+          file_exists={{ postflight_file_exists }}
+          size_matches={{ postflight_size_matches }}
+          checksum_matches={{ postflight_checksum_matches }}
+          db_rows={{ postflight_db_rows.stdout | default('n/a') }}
+          nfs_object_check={{ postflight_nfs_object.stdout | default('n/a') }}
+          nginx_log_sample={{ postflight_nginx_log.stdout | default('n/a') }}
+          app_log_host={{ postflight_app_host }}
+          app_log_sample={{ postflight_app_log.stdout | default('n/a') }}
+          result_dir={{ postflight_result_dir }}
+
+    - name: Display lab-full-ops postflight report
+      ansible.builtin.command: "cat {{ postflight_report_file }}"
+      register: postflight_report
+      changed_when: false
+
+    - name: Show lab-full-ops postflight report
+      ansible.builtin.debug:
+        var: postflight_report.stdout_lines
