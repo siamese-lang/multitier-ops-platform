@@ -82,6 +82,7 @@ jobs:
             playbooks/lab-full-min-ops-sample-service.yml
             playbooks/lab-full-ops-release-metadata-smoke.yml
             playbooks/lab-full-ops-preflight-check.yml
+            playbooks/lab-full-ops-postflight-check.yml
             playbooks/lab-full-ops-enhanced-service-workflow-validation.yml
             playbooks/lab-full-ops-enhanced-upload-limit-incident.yml
             playbooks/lab-full-ops-enhanced-latency-scenario.yml
