@@ -1,0 +1,185 @@
+---
+# Archive and fetch v1.1 operating-change evidence from lab-full-ops.
+#
+# Run this after lab-full-ops-bad-db-env-rollback-validation.yml and before
+# destroying the AWS lab runtime. It does not create or modify infrastructure.
+#
+# By default, archives are fetched to the Ansible control node under /tmp.
+# Override V1_1_EVIDENCE_DIR when a different local archive path is required.
+
+- name: Archive and fetch lab-full-ops v1.1 evidence bundle
+  hosts: web:app
+  become: true
+  gather_facts: true
+
+  vars:
+    v1_1_report_dir: /tmp/multitier-ops-platform
+    v1_1_local_archive_dir: "{{ lookup('env', 'V1_1_EVIDENCE_DIR') | default('/tmp/multitier-ops-platform-evidence/v1-1', true) }}"
+    v1_1_remote_staging_dir: "{{ v1_1_report_dir }}/v1-1-evidence-bundle-{{ inventory_hostname }}"
+    v1_1_archive_basename: "lab-full-ops-v1-1-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short | default('manual') }}"
+    v1_1_remote_archive_file: "{{ v1_1_report_dir }}/{{ v1_1_archive_basename }}.tar.gz"
+    v1_1_preflight_result_dir: "{{ v1_1_report_dir }}/lab-full-ops-preflight"
+    v1_1_preflight_report_file: "{{ v1_1_report_dir }}/lab-full-ops-preflight-{{ inventory_hostname }}.txt"
+    v1_1_postflight_result_dir: "{{ v1_1_report_dir }}/lab-full-ops-postflight"
+    v1_1_postflight_report_file: "{{ v1_1_report_dir }}/lab-full-ops-postflight-{{ inventory_hostname }}.txt"
+    v1_1_bad_db_env_result_dir: "{{ v1_1_report_dir }}/bad-db-env-{{ inventory_hostname }}"
+    v1_1_bad_db_env_report_file: "{{ v1_1_report_dir }}/lab-full-ops-bad-db-env-rollback-{{ inventory_hostname }}.txt"
+
+  pre_tasks:
+    - name: Assert this evidence bundle task runs on WEB or APP hosts
+      ansible.builtin.assert:
+        that:
+          - "'web' in group_names or 'app' in group_names"
+        fail_msg: "Run this playbook against web and app inventory groups after v1.1 runtime validation."
+
+    - name: Show v1.1 evidence bundle boundary
+      ansible.builtin.debug:
+        msg:
+          - "This playbook archives v1.1 preflight, bad DB env rollback, and postflight evidence."
+          - "Run after lab-full-ops-bad-db-env-rollback-validation.yml and before AWS lab cleanup."
+          - "Local destination: {{ v1_1_local_archive_dir }}"
+
+  tasks:
+    - name: Build remote v1.1 evidence bundle staging directory
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        report_dir="{{ v1_1_report_dir }}"
+        stage="{{ v1_1_remote_staging_dir }}"
+        is_web="{{ 'true' if 'web' in group_names else 'false' }}"
+        is_app="{{ 'true' if 'app' in group_names else 'false' }}"
+
+        rm -rf "${stage}"
+        mkdir -p "${stage}/metadata" "${stage}/reports" "${stage}/results" "${stage}/logs"
+
+        manifest="${stage}/metadata/manifest.txt"
+        missing_file="${stage}/metadata/missing.txt"
+        : > "${missing_file}"
+
+        {
+          echo "project={{ project_name | default('multitier-ops-platform') }}"
+          echo "environment={{ environment_name | default('lab-full-ops') }}"
+          echo "validation=lab-full-ops-v1-1-evidence-bundle"
+          echo "inventory_hostname={{ inventory_hostname }}"
+          echo "ansible_host={{ ansible_host | default('n/a') }}"
+          echo "groups={{ group_names | join(',') }}"
+          echo "created_at={{ ansible_date_time.iso8601 | default('manual') }}"
+          echo "scenario=preflight_bad_db_env_rollback_postflight"
+          echo "staging_dir=${stage}"
+          echo "archive_file={{ v1_1_remote_archive_file }}"
+          echo
+          echo "[expected failure shape]"
+          echo "healthz=200"
+          echo "readyz=503"
+          echo "dependencies=503"
+          echo "summary.app=UP"
+          echo "summary.db=DOWN"
+          echo "summary.storage=UP"
+          echo
+          echo "[collected files]"
+        } > "${manifest}"
+
+        missing_required=0
+        copy_candidate() {
+          src="$1"
+          dest_rel="$2"
+          requirement="$3"
+          if [ -e "${src}" ]; then
+            mkdir -p "$(dirname "${stage}/${dest_rel}")"
+            cp -a "${src}" "${stage}/${dest_rel}"
+            echo "present requirement=${requirement} src=${src} dest=${dest_rel}" >> "${manifest}"
+          else
+            echo "missing requirement=${requirement} src=${src}" >> "${missing_file}"
+            echo "missing requirement=${requirement} src=${src}" >> "${manifest}"
+            if [ "${requirement}" = "required" ]; then
+              missing_required=$((missing_required + 1))
+            fi
+          fi
+        }
+
+        if [ "${is_web}" = "true" ]; then
+          copy_candidate "{{ v1_1_preflight_report_file }}" "reports/$(basename "{{ v1_1_preflight_report_file }}")" required
+          copy_candidate "{{ v1_1_preflight_result_dir }}" "results/$(basename "{{ v1_1_preflight_result_dir }}")" required
+          copy_candidate "{{ v1_1_postflight_report_file }}" "reports/$(basename "{{ v1_1_postflight_report_file }}")" required
+          copy_candidate "{{ v1_1_postflight_result_dir }}" "results/$(basename "{{ v1_1_postflight_result_dir }}")" required
+
+          grep 'lab-full-ops-preflight\|lab-full-ops-postflight' /var/log/nginx/ops_access.log \
+            > "${stage}/logs/nginx-v1-1-request-ids.log" 2>/dev/null || true
+          systemctl status nginx --no-pager > "${stage}/logs/nginx-systemd-status.txt" 2>&1 || true
+          nginx -t > "${stage}/logs/nginx-config-test.txt" 2>&1 || true
+        fi
+
+        if [ "${is_app}" = "true" ]; then
+          copy_candidate "{{ v1_1_bad_db_env_report_file }}" "reports/$(basename "{{ v1_1_bad_db_env_report_file }}")" required
+          copy_candidate "{{ v1_1_bad_db_env_result_dir }}" "results/$(basename "{{ v1_1_bad_db_env_result_dir }}")" required
+
+          systemctl status ops-sample-service --no-pager > "${stage}/logs/app-systemd-status.txt" 2>&1 || true
+          journalctl -u ops-sample-service --no-pager --since '-2 hours' \
+            > "${stage}/logs/app-journal-v1-1-window.log" 2>&1 || true
+        fi
+
+        {
+          echo
+          echo "[file tree]"
+          find "${stage}" -type f -print | sort
+        } >> "${manifest}"
+
+        {
+          cd "${stage}"
+          find . -type f ! -path './metadata/archive-sha256sums.txt' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum
+        } > "${stage}/metadata/archive-sha256sums.txt"
+
+        if [ "${missing_required}" -ne 0 ]; then
+          echo "missing_required=${missing_required}" >&2
+          cat "${missing_file}" >&2
+          exit 1
+        fi
+
+        cat "${manifest}"
+      args:
+        executable: /bin/bash
+      register: v1_1_bundle_manifest
+      changed_when: true
+
+    - name: Create remote v1.1 evidence archive
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ v1_1_report_dir }}"
+        tar -czf "{{ v1_1_remote_archive_file }}" "{{ v1_1_remote_staging_dir | basename }}"
+        sha256sum "{{ v1_1_remote_archive_file }}" > "{{ v1_1_remote_archive_file }}.sha256"
+        ls -lh "{{ v1_1_remote_archive_file }}" "{{ v1_1_remote_archive_file }}.sha256"
+      args:
+        executable: /bin/bash
+      register: v1_1_remote_archive
+      changed_when: true
+
+    - name: Ensure local v1.1 evidence archive directory exists
+      ansible.builtin.file:
+        path: "{{ v1_1_local_archive_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch v1.1 evidence archive
+      ansible.builtin.fetch:
+        src: "{{ v1_1_remote_archive_file }}"
+        dest: "{{ v1_1_local_archive_dir }}/"
+        flat: true
+
+    - name: Fetch v1.1 evidence archive checksum
+      ansible.builtin.fetch:
+        src: "{{ v1_1_remote_archive_file }}.sha256"
+        dest: "{{ v1_1_local_archive_dir }}/"
+        flat: true
+
+    - name: Show v1.1 evidence archive result
+      ansible.builtin.debug:
+        msg:
+          - "host={{ inventory_hostname }}"
+          - "remote_archive={{ v1_1_remote_archive_file }}"
+          - "local_archive={{ v1_1_local_archive_dir }}/{{ v1_1_remote_archive_file | basename }}"
+          - "local_checksum={{ v1_1_local_archive_dir }}/{{ v1_1_remote_archive_file | basename }}.sha256"
+          - "Keep these archives with the v1.1 runtime evidence after interpretation."
